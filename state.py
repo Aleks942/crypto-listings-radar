@@ -1,7 +1,7 @@
 import json
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, Set, Optional
+from typing import Any, Dict, Optional, Set
 
 STATE_FILE = os.getenv("STATE_FILE", "state.json")
 
@@ -25,8 +25,6 @@ def save_state(state: Dict[str, Any]) -> None:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
     except Exception:
-        # на Railway локальное состояние может быть эфемерным,
-        # но для текущей сессии всё равно помогает
         pass
 
 
@@ -41,7 +39,6 @@ def _as_int_set(values) -> Set[int]:
 
 
 # ---------- SEEN (антидубли новых монет) ----------
-
 def seen_ids(state: Dict[str, Any]) -> Set[int]:
     return _as_int_set(state.get("seen_ids"))
 
@@ -54,7 +51,6 @@ def mark_seen(state: Dict[str, Any], cid: int) -> None:
 
 
 # ---------- TRACKED (⭐ отслеживаемые) ----------
-
 def tracked_ids(state: Dict[str, Any]) -> Set[int]:
     return _as_int_set(state.get("tracked_ids"))
 
@@ -67,7 +63,6 @@ def mark_tracked(state: Dict[str, Any], cid: int) -> None:
 
 
 # ---------- WATCH VOLUME (база объёма для SPIKE) ----------
-
 def save_watch_volume(state: Dict[str, Any], cid: int, base_volume_24h: float) -> None:
     state.setdefault("watch_volume", {})
     state["watch_volume"][str(cid)] = {
@@ -80,8 +75,7 @@ def get_watch_volume(state: Dict[str, Any], cid: int) -> Optional[Dict[str, Any]
     return (state.get("watch_volume") or {}).get(str(cid))
 
 
-# ---------- SPIKE SENT (чтобы не спамил одним и тем же) ----------
-
+# ---------- SPIKE SENT (чтобы не спамил) ----------
 def spike_sent_ids(state: Dict[str, Any]) -> Set[int]:
     return _as_int_set(state.get("spike_sent_ids"))
 
@@ -98,3 +92,19 @@ def clear_spike_sent(state: Dict[str, Any], cid: int) -> None:
     if cid in s:
         s.remove(cid)
     state["spike_sent_ids"] = list(s)
+
+
+# ---------- TRADE STATE (TP1/TRAIL от цены в момент SPIKE) ----------
+def get_trade(state: Dict[str, Any], cid: int) -> Optional[Dict[str, Any]]:
+    return (state.get("trades") or {}).get(str(cid))
+
+
+def upsert_trade(state: Dict[str, Any], cid: int, trade: Dict[str, Any]) -> None:
+    state.setdefault("trades", {})
+    state["trades"][str(cid)] = trade
+
+
+def clear_trade(state: Dict[str, Any], cid: int) -> None:
+    trades = state.get("trades") or {}
+    trades.pop(str(cid), None)
+    state["trades"] = trades
