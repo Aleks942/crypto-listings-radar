@@ -1,19 +1,9 @@
-SIGNAL_CFG = {
-    "max_age_days": 14,
-    "ultra_age_days": 1,
+# config_signals.py
 
-    "min_pairs_ultra": 1,
-    "min_volume_watch": 200_000,
-    "min_volume_ultra": 500_000,
+CONFIRM_MIN_AGE_MIN = 20        # минимум минут после листинга
+CONFIRM_MAX_AGE_MIN = 180       # максимум (пока первая волна жива)
 
-    "confirm_volume_ratio": 1.8,
-    "spike_volume_ratio": 2.5,
+CONFIRM_VOLUME_MULTIPLIER = 1.7 # объём вырос минимум в 1.7 раза
+CONFIRM_PRICE_DROP_MAX = -0.05  # цена не падала больше чем на -5%
 
-    "confirm_price_chg_1h": 0.06,
-    "spike_price_chg_1h": 0.10,
-
-    "grade_A_score": 85,
-    "grade_B_score": 70,
-
-    "cooldown_minutes": 60,
-}
+CONFIRM_MIN_VOLUME_USD = 300_000
