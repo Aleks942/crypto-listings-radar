@@ -1,147 +1,37 @@
 import asyncio
-from datetime import datetime, time
-from typing import Dict, Any, Optional
-
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from datetime import datetime, timezone
+from telegram.ext import Application
 from telegram.constants import ParseMode
-from telegram.ext import (
-    Application,
-    CallbackQueryHandler,
-    ContextTypes,
-)
 
 from config import Settings
 from cmc import CMCClient, age_days, cmc_urls
 from sheets import SheetsClient, now_iso_utc
-from state import (
-    load_state,
-    save_state,
-    mark_seen,
-    mark_tracked,
-    seen_ids,
-)
-
-# =========================
-# УТИЛИТЫ
-# =========================
-
-def fmt_money(x: Optional[float]) -> str:
-    if x is None:
-        return "—"
-    try:
-        x = float(x)
-    except Exception:
-        return "—"
-    if x >= 1_000_000_000:
-        return f"${x/1_000_000_000:.2f}B"
-    if x >= 1_000_000:
-        return f"${x/1_000_000:.2f}M"
-    if x >= 1_000:
-        return f"${x/1_000:.2f}K"
-    return f"${x:.2f}"
+from state import load_state, save_state, mark_seen, mark_tracked, seen_ids
 
 
-def get_dynamic_interval_minutes() -> int:
-    """
-    Днём (08:00–23:00 UTC) — 20 минут
-    Ночью (23:00–08:00 UTC) — 60 минут
-    """
-    now = datetime.utcnow().time()
-    if time(8, 0) <= now < time(23, 0):
-        return 20
-    return 60
+# ---------------- utils ----------------
+
+def is_daytime():
+    hour = datetime.now().hour
+    return 7 <= hour < 23
 
 
-# =========================
-# СООБЩЕНИЯ
-# =========================
-
-def build_message(
-    coin: Dict[str, Any],
-    age: int,
-    market_cap: float,
-    vol24: float,
-    urls: Dict[str, str],
-    pairs: int,
-    price: Optional[float],
-) -> str:
-    price_line = f"Цена (CMC): ${price}" if price else "Цена (CMC): —"
-
-    return (
-        f"🆕 *Новая монета обнаружена*\n\n"
-        f"*{coin.get('name')}* (`{coin.get('symbol')}`)\n"
-        f"CMC ID: `{coin.get('id')}`\n"
-        f"Slug: `{coin.get('slug')}`\n"
-        f"Дата добавления: `{coin.get('date_added')}`\n"
-        f"Возраст: *{age} дн.*  |  Пары: *{pairs}*\n\n"
-        f"{price_line}\n"
-        f"Market Cap: *{fmt_money(market_cap)}*\n"
-        f"Volume 24h: *{fmt_money(vol24)}*\n\n"
-        f"Ссылки:\n"
-        f"• CoinMarketCap: {urls['cmc']}\n"
-        f"• Markets: {urls['markets']}"
-    )
+def spike_grade(vol_mult, price_pct, pairs_added, cap):
+    if vol_mult >= 2.5 and price_pct >= 20 and pairs_added >= 3 and cap <= 30_000_000:
+        return "A"
+    if vol_mult >= 2.0 and price_pct >= 10 and pairs_added >= 1 and cap <= 50_000_000:
+        return "B"
+    return "C"
 
 
-def build_keyboard(cmc_url: str, markets_url: str, cmc_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🔎 CoinMarketCap", url=cmc_url),
-            InlineKeyboardButton("💱 Где купить", url=markets_url),
-        ],
-        [
-            InlineKeyboardButton("⭐ Добавить в отслеживаемые", callback_data=f"track:{cmc_id}"),
-        ],
-    ])
+# ---------------- core ----------------
 
-
-# =========================
-# ФИЛЬТРЫ
-# =========================
-
-def passes_filters(
-    coin: Dict[str, Any],
-    max_age_days: int,
-    min_volume_usd: float,
-) -> Optional[Dict[str, Any]]:
-    age = age_days(coin.get("date_added", ""))
-    if age is None or age > max_age_days:
-        return None
-
-    usd = (coin.get("quote") or {}).get("USD") or {}
-    market_cap = float(usd.get("market_cap") or 0)
-    vol24 = float(usd.get("volume_24h") or 0)
-    price = usd.get("price")
-
-    if vol24 < min_volume_usd:
-        return None
-
-    slug = (coin.get("slug") or "").strip()
-    if not slug:
-        return None
-
-    pairs = int(coin.get("num_market_pairs") or 0)
-
-    return {
-        "age": age,
-        "market_cap": market_cap,
-        "vol24": vol24,
-        "slug": slug,
-        "pairs": pairs,
-        "price": price,
-    }
-
-
-# =========================
-# СКАНЕР
-# =========================
-
-async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets: SheetsClient):
+async def scan(app, settings, cmc, sheets):
     state = load_state()
     seen = seen_ids(state)
 
     coins = cmc.fetch_recent_listings(limit=settings.limit)
-    sent = 0
+    spikes_today = state.get("spikes_today", 0)
 
     for coin in coins:
         cid = int(coin.get("id") or 0)
@@ -150,90 +40,84 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
 
         mark_seen(state, cid)
 
-        metrics = passes_filters(
-            coin,
-            settings.max_age_days,
-            settings.min_volume_usd,
-        )
-        if not metrics:
-            continue
+        age = age_days(coin.get("date_added"))
+        usd = coin.get("quote", {}).get("USD", {})
+        volume = float(usd.get("volume_24h") or 0)
+        cap = float(usd.get("market_cap") or 0)
+        price = float(usd.get("price") or 0)
+        pairs = int(coin.get("num_market_pairs") or 0)
 
-        urls = cmc_urls(metrics["slug"])
-
-        text = build_message(
-            coin=coin,
-            age=metrics["age"],
-            market_cap=metrics["market_cap"],
-            vol24=metrics["vol24"],
-            urls=urls,
-            pairs=metrics["pairs"],
-            price=metrics["price"],
-        )
-
-        keyboard = build_keyboard(urls["cmc"], urls["markets"], cid)
-
+        # ---- always log to Sheets ----
         sheets.append_listing({
             "cmc_id": cid,
             "detected_at": now_iso_utc(),
             "symbol": coin.get("symbol"),
             "name": coin.get("name"),
-            "slug": metrics["slug"],
-            "date_added": coin.get("date_added"),
-            "age_days": metrics["age"],
-            "market_cap_usd": metrics["market_cap"],
-            "volume24h_usd": metrics["vol24"],
-            "price": metrics["price"],
-            "pairs": metrics["pairs"],
-            "cmc_url": urls["cmc"],
-            "markets_url": urls["markets"],
-            "status": "NEW",
+            "slug": coin.get("slug"),
+            "age_days": age,
+            "market_cap": cap,
+            "volume_24h": volume,
+            "price": price,
+            "pairs": pairs,
+            "status": "NEW"
         })
 
-        await app.bot.send_message(
-            chat_id=settings.chat_id,
-            text=text,
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True,
-            reply_markup=keyboard,
-        )
+        # ---- ULTRA (Telegram) ----
+        if age <= 1 and volume >= 500_000:
+            await app.bot.send_message(
+                chat_id=settings.chat_id,
+                parse_mode=ParseMode.MARKDOWN,
+                text=(
+                    f"⚡ *ULTRA-EARLY*\n\n"
+                    f"{coin['name']} ({coin['symbol']})\n"
+                    f"Возраст: {age} дн | Пары: {pairs}\n"
+                    f"Market Cap: ${cap/1e6:.2f}M\n"
+                    f"Volume 24h: ${volume/1e6:.2f}M\n\n"
+                    f"🔍 Отбор, не вход"
+                )
+            )
 
-        sent += 1
+        # ---- SPIKE ----
+        tracked = cid in state.get("tracked", {})
+        vol_mult = state.get("last_volume", {}).get(cid, 0)
+        price_prev = state.get("last_price", {}).get(cid, price)
+        price_pct = ((price - price_prev) / price_prev * 100) if price_prev else 0
+        pairs_prev = state.get("last_pairs", {}).get(cid, pairs)
+        pairs_added = pairs - pairs_prev
+
+        if tracked and vol_mult >= 2.0 and spikes_today < 2 and cap <= 50_000_000:
+            grade = spike_grade(vol_mult, price_pct, pairs_added, cap)
+
+            if grade != "C":
+                state["spikes_today"] = spikes_today + 1
+
+                await app.bot.send_message(
+                    chat_id=settings.chat_id,
+                    parse_mode=ParseMode.MARKDOWN,
+                    text=(
+                        f"🔥 *SPIKE {grade} — ВХОД*\n\n"
+                        f"{coin['name']} ({coin['symbol']})\n"
+                        f"Цена: ${price}\n"
+                        f"Market Cap: ${cap/1e6:.2f}M\n\n"
+                        f"*Причина:*\n"
+                        f"• Volume x{vol_mult:.2f}\n"
+                        f"• Цена +{price_pct:.1f}%\n"
+                        f"• Пары +{pairs_added}\n\n"
+                        f"*План:*\n"
+                        f"🟢 TP1: +35%\n"
+                        f"🔴 Trail: -20%"
+                    )
+                )
+
+        # ---- remember last values ----
+        state.setdefault("last_volume", {})[cid] = volume
+        state.setdefault("last_price", {})[cid] = price
+        state.setdefault("last_pairs", {})[cid] = pairs
 
     save_state(state)
 
-    if sent:
-        await app.bot.send_message(
-            chat_id=settings.chat_id,
-            text=f"✅ Listings Radar: новых монет: {sent}",
-        )
 
-
-# =========================
-# CALLBACK
-# =========================
-
-async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data or ""
-
-    if data.startswith("track:"):
-        cid = int(data.split(":", 1)[1])
-
-        state = load_state()
-        mark_tracked(state, cid)
-        save_state(state)
-
-        sheets: SheetsClient = context.application.bot_data["sheets"]
-        sheets.mark_status(cid, "TRACK")
-
-        await query.edit_message_reply_markup(reply_markup=None)
-        await query.message.reply_text(f"⭐ Добавлено в отслеживаемые: CMC_ID {cid}")
-
-
-# =========================
-# MAIN
-# =========================
+# ---------------- entry ----------------
 
 async def main():
     settings = Settings.load()
@@ -246,9 +130,6 @@ async def main():
         settings.sheet_tab_name,
     )
 
-    app.bot_data["sheets"] = sheets
-    app.add_handler(CallbackQueryHandler(on_callback))
-
     await app.initialize()
     await app.start()
 
@@ -257,24 +138,24 @@ async def main():
         text=(
             "📡 *Listings Radar запущен*\n"
             "⏱ Днём: каждые 20 мин\n"
-            "🌙 Ночью: каждые 60 мин\n"
-            f"• Макс. возраст: {settings.max_age_days} дн\n"
-            f"• Мин. объём 24h: ${int(settings.min_volume_usd)}"
+            "🌙 Ночью: каждые 60 мин\n\n"
+            "Telegram = только ULTRA и SPIKE\n"
+            "🆕 пишутся в Google Sheets"
         ),
         parse_mode=ParseMode.MARKDOWN,
     )
 
     while True:
         try:
-            await scan_once(app, settings, cmc, sheets)
+            await scan(app, settings, cmc, sheets)
         except Exception as e:
             await app.bot.send_message(
                 chat_id=settings.chat_id,
-                text=f"❌ Ошибка Listings Radar: {e}",
+                text=f"❌ Ошибка: {e}",
             )
 
-        interval_min = get_dynamic_interval_minutes()
-        await asyncio.sleep(interval_min * 60)
+        sleep_min = 20 if is_daytime() else 60
+        await asyncio.sleep(sleep_min * 60)
 
 
 if __name__ == "__main__":
