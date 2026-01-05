@@ -1,88 +1,60 @@
-from dataclasses import dataclass
-from typing import Optional, Dict
+# signals.py
 
-@dataclass
-class SignalResult:
-    stage: str
-    grade: Optional[str]
-    score: int
-    reasons: list
+from datetime import datetime, timezone
+from config_signals import (
+    CONFIRM_MIN_AGE_MIN,
+    CONFIRM_MAX_AGE_MIN,
+    CONFIRM_VOLUME_MULTIPLIER,
+    CONFIRM_PRICE_DROP_MAX,
+    CONFIRM_MIN_VOLUME_USD
+)
 
-def compute_score(f: Dict) -> int:
-    score = 0
+def minutes_since(ts_iso: str) -> float:
+    ts = datetime.fromisoformat(ts_iso.replace("Z", "+00:00"))
+    now = datetime.now(timezone.utc)
+    return (now - ts).total_seconds() / 60
 
-    age = f.get("age_days", 999)
-    if age <= 1: score += 25
-    elif age <= 3: score += 18
-    elif age <= 7: score += 10
 
-    vol = f.get("vol_24h", 0)
-    if vol >= 50_000_000: score += 25
-    elif vol >= 10_000_000: score += 20
-    elif vol >= 1_000_000: score += 12
-    elif vol >= 200_000: score += 6
+def check_confirm(token, baseline):
+    """
+    token    — текущие данные из CMC
+    baseline — сохранённые стартовые данные
+    """
 
-    vr = f.get("vol_ratio", 0)
-    if vr >= 3.0: score += 25
-    elif vr >= 2.5: score += 22
-    elif vr >= 1.8: score += 16
+    age_min = minutes_since(token["date_added"])
 
-    pc = f.get("price_chg_1h", 0)
-    if pc >= 0.20: score += 15
-    elif pc >= 0.10: score += 12
-    elif pc >= 0.06: score += 8
+    # 1. Проверка времени
+    if age_min < CONFIRM_MIN_AGE_MIN or age_min > CONFIRM_MAX_AGE_MIN:
+        return None
 
-    pairs = f.get("pairs", 0)
-    if pairs >= 30: score += 10
-    elif pairs >= 10: score += 7
-    elif pairs >= 3: score += 4
-    elif pairs >= 1: score += 2
+    # 2. Минимальный объём
+    vol_now = token["volume_24h"]
+    if vol_now < CONFIRM_MIN_VOLUME_USD:
+        return None
 
-    return min(score, 100)
+    # 3. Рост объёма
+    vol_base = baseline["volume_24h"]
+    if vol_base <= 0:
+        return None
 
-def classify_signal(f: Dict, cfg: Dict) -> SignalResult:
-    reasons = []
-    score = compute_score(f)
+    volume_multiplier = vol_now / vol_base
+    if volume_multiplier < CONFIRM_VOLUME_MULTIPLIER:
+        return None
 
-    stage = "NONE"
-    grade = None
+    # 4. Цена не валится
+    price_now = token["price"]
+    price_base = baseline["price"]
 
-    if f["vol_24h"] >= cfg["min_volume_watch"]:
-        stage = "WATCH"
+    if price_base > 0:
+        price_change = (price_now - price_base) / price_base
+        if price_change < CONFIRM_PRICE_DROP_MAX:
+            return None
 
-    if f["age_days"] <= cfg["ultra_age_days"] and f["vol_24h"] >= cfg["min_volume_ultra"]:
-        stage = "ULTRA"
-        reasons.append("очень ранний листинг")
+    # ✅ CONFIRM ПРОЙДЕН
+    return {
+        "type": "CONFIRM",
+        "volume_x": round(volume_multiplier, 2),
+        "price_change_pct": round(price_change * 100, 2),
+        "age_min": int(age_min)
+    }
 
-    confirm = 0
-    if f["vol_ratio"] >= cfg["confirm_volume_ratio"]:
-        confirm += 1
-        reasons.append("рост объёма")
-    if f["price_chg_1h"] >= cfg["confirm_price_chg_1h"]:
-        confirm += 1
-        reasons.append("рост цены")
-    if f["pairs"] >= 3:
-        confirm += 1
-        reasons.append("есть ликвидность")
-
-    if confirm >= 3:
-        stage = "CONFIRM"
-
-    spike = 0
-    if f["vol_ratio"] >= cfg["spike_volume_ratio"]:
-        spike += 1
-    if f["price_chg_1h"] >= cfg["spike_price_chg_1h"]:
-        spike += 1
-    if f["vol_24h"] >= 5_000_000:
-        spike += 1
-
-    if spike >= 2:
-        stage = "SPIKE"
-        if score >= cfg["grade_A_score"]:
-            grade = "A"
-        elif score >= cfg["grade_B_score"]:
-            grade = "B"
-        else:
-            grade = "C"
-
-    return SignalResult(stage, grade, score, reasons)
