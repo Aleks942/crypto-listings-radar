@@ -23,3 +23,13 @@ def update_baseline(baseline: dict, key: str, vol_24h: float) -> float:
     new = ema(prev, vol_24h)
     baseline[key] = new
     return new
+def update_prev_volume(state, cmc_id, volume):
+    state.setdefault("prev_volume", {})
+    state["prev_volume"][str(cmc_id)] = {
+        "volume": volume,
+        "ts": time.time()
+    }
+
+
+def get_prev_volume(state, cmc_id):
+    return state.get("prev_volume", {}).get(str(cmc_id))
