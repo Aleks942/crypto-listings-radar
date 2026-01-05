@@ -201,4 +201,5 @@ async def main():
                 chat_id=settings.chat_id,
                 text=f"❌ Ошибка Listings Radar: {e}",
             )
-        await asyncio.sleep(settings.check_interval_min
+       await asyncio.sleep(settings.check_interval_min * 60)
+
