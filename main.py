@@ -12,7 +12,6 @@ from signals import check_confirm_light
 from confirm_sender import send_to_confirm_engine
 from candles_bybit import get_candles_5m
 
-
 CONFIRM_URL = "https://web-production-2e833.up.railway.app/webhook/listing"
 
 
@@ -55,9 +54,7 @@ async def scan_once(app, settings, cmc, sheets):
             "ts": now_ts,
         }
 
-        # --------------------------------------------------
-        # GOOGLE SHEETS
-        # --------------------------------------------------
+        # ---------------- GOOGLE SHEETS ----------------
 
         sheets.buffer_append({
             "detected_at": now_iso_utc(),
@@ -72,24 +69,20 @@ async def scan_once(app, settings, cmc, sheets):
             "comment": "",
         })
 
-        # --------------------------------------------------
-        # ULTRA-EARLY
-        # --------------------------------------------------
+        # ---------------- ULTRA-EARLY ----------------
 
         if age is not None and age <= 1 and vol >= 500_000:
             if cid not in seen:
-                text = (
-                    f"⚡ ULTRA-EARLY\n\n"
-                    f"<b>{token['name']}</b> ({token['symbol']})\n"
-                    f"Возраст: {age} дн\n"
-                    f"Market Cap: ${mcap:,.0f}\n"
-                    f"Volume 24h: ${vol:,.0f}\n\n"
-                    f"🔍 Отбор, не вход"
-                )
-
                 await app.bot.send_message(
                     chat_id=settings.chat_id,
-                    text=text,
+                    text=(
+                        f"⚡ ULTRA-EARLY\n\n"
+                        f"<b>{token['name']}</b> ({token['symbol']})\n"
+                        f"Возраст: {age} дн\n"
+                        f"Market Cap: ${mcap:,.0f}\n"
+                        f"Volume 24h: ${vol:,.0f}\n\n"
+                        f"🔍 Отбор, не вход"
+                    ),
                     parse_mode=ParseMode.HTML,
                 )
 
@@ -97,50 +90,47 @@ async def scan_once(app, settings, cmc, sheets):
                 mark_seen(state, cid)
 
                 # ---------- CONFIRM / ENTRY ENGINE ----------
-                payload = {
-                    "symbol": token["symbol"],
-                    "exchange": "CMC",
-                    "tf": "5m",
-                    "mode_hint": "FIRST_MOVE",
-                    "candles": []
-                }
+                candles = get_candles_5m(token["symbol"], limit=30)
 
-                try:
-                    send_to_confirm_engine(payload, CONFIRM_URL)
-                except Exception as e:
-                    await app.bot.send_message(
-                        chat_id=settings.chat_id,
-                        text=f"⚠️ Confirm-engine error: {e}",
-                    )
+                if candles:
+                    payload = {
+                        "symbol": token["symbol"],
+                        "exchange": "BYBIT",
+                        "tf": "5m",
+                        "mode_hint": "FIRST_MOVE",
+                        "candles": candles,
+                    }
 
-        # --------------------------------------------------
-        # CONFIRM-LIGHT
-        # --------------------------------------------------
+                    try:
+                        send_to_confirm_engine(payload, CONFIRM_URL)
+                    except Exception as e:
+                        await app.bot.send_message(
+                            chat_id=settings.chat_id,
+                            text=f"⚠️ Confirm-engine error: {e}",
+                        )
+
+        # ---------------- CONFIRM-LIGHT ----------------
 
         prev_snapshot = state.get("snapshots", {}).get(str(cid))
         confirm_light = check_confirm_light(token, prev_snapshot)
 
         if confirm_light:
-            text = (
-                f"🟢 CONFIRM-LIGHT\n\n"
-                f"<b>{token['name']}</b> ({token['symbol']})\n"
-                f"Возраст: {confirm_light['age_min']} мин\n"
-                f"Рост объёма: x{confirm_light['volume_x']}\n"
-                f"Интервал: {confirm_light['minutes']} мин\n\n"
-                f"⚠️ Ранний вход (малый объём)"
-            )
-
             await app.bot.send_message(
                 chat_id=settings.chat_id,
-                text=text,
+                text=(
+                    f"🟢 CONFIRM-LIGHT\n\n"
+                    f"<b>{token['name']}</b> ({token['symbol']})\n"
+                    f"Возраст: {confirm_light['age_min']} мин\n"
+                    f"Рост объёма: x{confirm_light['volume_x']}\n"
+                    f"Интервал: {confirm_light['minutes']} мин\n\n"
+                    f"⚠️ Ранний вход (малый объём)"
+                ),
                 parse_mode=ParseMode.HTML,
             )
 
             sent_confirm_light += 1
 
-        # --------------------------------------------------
-        # SNAPSHOT
-        # --------------------------------------------------
+        # ---------------- SNAPSHOT ----------------
 
         state.setdefault("snapshots", {})[str(cid)] = {
             "volume_24h": vol,
