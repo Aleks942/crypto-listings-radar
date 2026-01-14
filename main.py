@@ -34,18 +34,16 @@ from candles_bybit import (
     get_candles_15m as get_bybit_15m,
 )
 
-# --------------------------------------------------
+# ==================================================
 # ОСНОВНОЙ СКАН
-# --------------------------------------------------
+# ==================================================
 
 async def scan_once(app, settings, cmc, sheets):
     state = load_state()
-
     seen = seen_ids(state)
     tracked = tracked_ids(state)
 
     coins = cmc.fetch_recent_listings(limit=settings.limit)
-
     now_ts = time.time()
 
     for coin in coins:
@@ -57,7 +55,6 @@ async def scan_once(app, settings, cmc, sheets):
         vol = float(usd.get("volume_24h") or 0)
         mcap = float(usd.get("market_cap") or 0)
         price = float(usd.get("price") or 0)
-
         age = age_days(coin.get("date_added"))
 
         token = {
@@ -106,90 +103,74 @@ async def scan_once(app, settings, cmc, sheets):
                     ),
                     parse_mode=ParseMode.HTML,
                 )
-
                 mark_seen(state, cid)
                 mark_tracked(state, cid)
 
         # ------------------------------
-        # TRACK → DETECT TRADING
+        # TRACK → ТОРГИ / СВЕЧИ
         # ------------------------------
-        if cid in tracked:
-            binance_ok = check_binance(token["symbol"])
-            bybit_ok = check_bybit(token["symbol"])
+        if cid not in tracked:
+            continue
 
-            await app.bot.send_message(
-                chat_id=settings.chat_id,
-                text=(
-                    "🟣 <b>TRACK UPDATE</b>\n\n"
-                    f"<b>{token['name']}</b> ({token['symbol']})\n"
-                    f"BINANCE: {'✅' if binance_ok else '❌'}\n"
-                    f"BYBIT: {'✅' if bybit_ok else '❌'}"
-                ),
-                parse_mode=ParseMode.HTML,
-            )
+        binance_ok = check_binance(token["symbol"])
+        bybit_ok = check_bybit(token["symbol"])
 
-                   # ------------------------------
-            # FIRST MOVE (5m)
-            # ------------------------------
-            candles_5m = []
-            if binance_ok:
-                candles_5m = get_binance_5m(token["symbol"])
-            elif bybit_ok:
-                candles_5m = get_bybit_5m(token["symbol"])
+        # ------------------------------
+        # FIRST MOVE (5m)
+        # ------------------------------
+        candles_5m = []
+        if binance_ok:
+            candles_5m = get_binance_5m(token["symbol"])
+        elif bybit_ok:
+            candles_5m = get_bybit_5m(token["symbol"])
 
-            FIRST_COOLDOWN = 60 * 60  # 1 час
+        FIRST_COOLDOWN = 60 * 60  # 1 час
 
-            if candles_5m:
-                fm = first_move_eval(token["symbol"], candles_5m)
+        if candles_5m:
+            fm = first_move_eval(token["symbol"], candles_5m)
+            if (
+                fm.get("ok")
+                and not first_move_sent(state, cid)
+                and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN)
+            ):
+                await app.bot.send_message(
+                    chat_id=settings.chat_id,
+                    text=fm["text"],
+                    parse_mode=ParseMode.HTML,
+                )
+                mark_first_move_sent(state, cid, time.time())
 
-                if (
-                    fm.get("ok")
-                    and not first_move_sent(state, cid)
-                    and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN)
-                ):
-                    await app.bot.send_message(
-                        chat_id=settings.chat_id,
-                        text=fm["text"],
-                        parse_mode=ParseMode.HTML,
-                    )
+        # ------------------------------
+        # CONFIRM-LIGHT (15m)
+        # ------------------------------
+        candles_15m = []
+        if binance_ok:
+            candles_15m = get_binance_15m(token["symbol"])
+        elif bybit_ok:
+            candles_15m = get_bybit_15m(token["symbol"])
 
-                    mark_first_move_sent(state, cid, time.time())
+        CONFIRM_COOLDOWN = 2 * 60 * 60  # 2 часа
 
-            # ------------------------------
-            # CONFIRM-LIGHT (15m)
-            # ------------------------------
-            candles_15m = []
-            if binance_ok:
-                candles_15m = get_binance_15m(token["symbol"])
-            elif bybit_ok:
-                candles_15m = get_bybit_15m(token["symbol"])
-
-            CONFIRM_COOLDOWN = 2 * 60 * 60  # 2 часа
-
-            if candles_15m:
-                cl = confirm_light_eval(token["symbol"], candles_15m)
-
-                if (
-                    cl.get("ok")
-                    and not confirm_light_sent(state, cid)
-                    and confirm_light_cooldown_ok(state, cid, CONFIRM_COOLDOWN)
-                ):
-                    await app.bot.send_message(
-                        chat_id=settings.chat_id,
-                        text=cl["text"],
-                        parse_mode=ParseMode.HTML,
-                    )
-
-                    mark_confirm_light_sent(state, cid, time.time())
-
+        if candles_15m:
+            cl = confirm_light_eval(token["symbol"], candles_15m)
+            if (
+                cl.get("ok")
+                and not confirm_light_sent(state, cid)
+                and confirm_light_cooldown_ok(state, cid, CONFIRM_COOLDOWN)
+            ):
+                await app.bot.send_message(
+                    chat_id=settings.chat_id,
+                    text=cl["text"],
+                    parse_mode=ParseMode.HTML,
+                )
+                mark_confirm_light_sent(state, cid, time.time())
 
     sheets.flush()
     save_state(state)
 
-
-# --------------------------------------------------
+# ==================================================
 # MAIN LOOP
-# --------------------------------------------------
+# ==================================================
 
 async def main():
     settings = Settings.load()
@@ -209,9 +190,10 @@ async def main():
         chat_id=settings.chat_id,
         text=(
             "📡 Listings Radar запущен\n"
-            "Режим: ULTRA → TRACK → FIRST → CONFIRM\n"
+            "Цепочка: ULTRA → TRACK → FIRST MOVE → CONFIRM-LIGHT\n"
             "🆕 → Google Sheets"
         ),
+        parse_mode=ParseMode.HTML,
     )
 
     while True:
@@ -222,10 +204,7 @@ async def main():
                 chat_id=settings.chat_id,
                 text=f"❌ Ошибка: {e}",
             )
-
         await asyncio.sleep(settings.check_interval_min * 60)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
-
