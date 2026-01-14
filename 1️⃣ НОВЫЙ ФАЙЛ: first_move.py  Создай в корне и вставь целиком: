@@ -1,0 +1,14 @@
+.gitignore
+README.md
+baseline.py
+candles_bybit.py
+candles_binance.py
+cmc.py
+config.py
+config_signals.py
+confirm_sender.py
+main.py
+requirements.txt
+sheets.py
+signals.py
+state.py
