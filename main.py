@@ -2,6 +2,10 @@ import asyncio
 import time
 from telegram.constants import ParseMode
 from telegram.ext import Application
+from confirm_light import confirm_light_signal
+from state import confirm_light_sent, mark_confirm_light_sent, confirm_light_cooldown_ok
+from candles_binance import get_candles_15m as get_binance_15m
+from candles_bybit import get_candles_15m as get_bybit_15m
 
 from config import Settings
 from cmc import CMCClient, age_days
