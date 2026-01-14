@@ -9,7 +9,8 @@ from sheets import SheetsClient, now_iso_utc
 from state import load_state, save_state, seen_ids, mark_seen
 from signals import check_confirm_light
 
-from confirm_sender import send_to_confirm_engine   # ✅ ТУТ
+from confirm_sender import send_to_confirm_engine
+
 CONFIRM_URL = "https://web-production-2e833.up.railway.app/webhook/listing"
 
 
@@ -53,7 +54,7 @@ async def scan_once(app, settings, cmc, sheets):
         }
 
         # --------------------------------------------------
-        # GOOGLE SHEETS — ВСЁ
+        # GOOGLE SHEETS
         # --------------------------------------------------
 
         sheets.buffer_append({
@@ -70,44 +71,57 @@ async def scan_once(app, settings, cmc, sheets):
         })
 
         # --------------------------------------------------
-        # ULTRA-EARLY (первый отбор)
+        # ULTRA-EARLY
         # --------------------------------------------------
-
 
         if age is not None and age <= 1 and vol >= 500_000:
             if cid not in seen:
                 text = (
-                    f"⚡ *ULTRA-EARLY*\n\n"
-                    f"*{token['name']}* ({token['symbol']})\n"
+                    f"⚡ ULTRA-EARLY\n\n"
+                    f"<b>{token['name']}</b> ({token['symbol']})\n"
                     f"Возраст: {age} дн\n"
                     f"Market Cap: ${mcap:,.0f}\n"
                     f"Volume 24h: ${vol:,.0f}\n\n"
                     f"🔍 Отбор, не вход"
                 )
 
-               await app.bot.send_message(
-    chat_id=settings.chat_id,
-    text=text,
-    parse_mode=ParseMode.HTML,
-)
-
+                await app.bot.send_message(
+                    chat_id=settings.chat_id,
+                    text=text,
+                    parse_mode=ParseMode.HTML,
                 )
 
                 sent_ultra += 1
                 mark_seen(state, cid)
 
+                # ---------- CONFIRM / ENTRY ENGINE ----------
+                payload = {
+                    "symbol": token["symbol"],
+                    "exchange": "CMC",
+                    "tf": "5m",
+                    "mode_hint": "FIRST_MOVE",
+                    "candles": []
+                }
+
+                try:
+                    send_to_confirm_engine(payload, CONFIRM_URL)
+                except Exception as e:
+                    await app.bot.send_message(
+                        chat_id=settings.chat_id,
+                        text=f"⚠️ Confirm-engine error: {e}",
+                    )
+
         # --------------------------------------------------
-        # CONFIRM-LIGHT (начало разгона)
+        # CONFIRM-LIGHT
         # --------------------------------------------------
 
         prev_snapshot = state.get("snapshots", {}).get(str(cid))
-
         confirm_light = check_confirm_light(token, prev_snapshot)
 
         if confirm_light:
             text = (
-                f"🟢 *CONFIRM-LIGHT*\n\n"
-                f"*{token['name']}* ({token['symbol']})\n"
+                f"🟢 CONFIRM-LIGHT\n\n"
+                f"<b>{token['name']}</b> ({token['symbol']})\n"
                 f"Возраст: {confirm_light['age_min']} мин\n"
                 f"Рост объёма: x{confirm_light['volume_x']}\n"
                 f"Интервал: {confirm_light['minutes']} мин\n\n"
@@ -117,13 +131,13 @@ async def scan_once(app, settings, cmc, sheets):
             await app.bot.send_message(
                 chat_id=settings.chat_id,
                 text=text,
-                parse_mode=ParseMode.MARKDOWN,
+                parse_mode=ParseMode.HTML,
             )
 
             sent_confirm_light += 1
 
         # --------------------------------------------------
-        # СОХРАНЯЕМ СНИМОК ДЛЯ СЛЕДУЮЩЕЙ ПРОВЕРКИ
+        # SNAPSHOT
         # --------------------------------------------------
 
         state.setdefault("snapshots", {})[str(cid)] = {
@@ -134,10 +148,6 @@ async def scan_once(app, settings, cmc, sheets):
 
     sheets.flush()
     save_state(state)
-
-    # --------------------------------------------------
-    # ИТОГОВЫЕ СООБЩЕНИЯ
-    # --------------------------------------------------
 
     if sent_ultra:
         await app.bot.send_message(
@@ -193,4 +203,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
