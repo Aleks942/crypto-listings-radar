@@ -108,3 +108,13 @@ def clear_trade(state: Dict[str, Any], cid: int) -> None:
     trades = state.get("trades") or {}
     trades.pop(str(cid), None)
     state["trades"] = trades
+    # ... существующий код state.py
+def clear_trade(state: Dict[str, Any], cid: int) -> None:
+    ...
+
+# ⬇️ ВОТ СЮДА ВСТАВЛЯЕМ НОВЫЙ КОД ⬇️
+
+# ---------- FIRST MOVE SENT (антидубликат) ----------
+def first_move_sent(state: dict, cid: int) -> bool:
+    ...
+
