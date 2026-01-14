@@ -139,25 +139,21 @@ async def scan_once(app, settings, cmc, sheets):
 
             FIRST_COOLDOWN = 60 * 60  # 1 час
 
-            if (
-                candles_5m
-                and first_move_signal(candles_5m)
-                and not first_move_sent(state, cid)
-                and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN)
-            ):
-                await app.bot.send_message(
-                    chat_id=settings.chat_id,
-                    text=(
-                        "🟢 <b>FIRST MOVE</b>\n\n"
-                        f"<b>{token['name']}</b> ({token['symbol']})\n"
-                        "TF: 5m\n\n"
-                        "Импульс подтверждён\n"
-                        "⚠️ Ранний вход (высокий риск)"
-                    ),
-                    parse_mode=ParseMode.HTML,
-                )
+            fm = first_move_eval(token["symbol"], candles_5m)
 
-                mark_first_move_sent(state, cid, time.time())
+if (
+    candles_5m
+    and fm.get("ok")
+    and not first_move_sent(state, cid)
+    and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN)
+):
+    await app.bot.send_message(
+        chat_id=settings.chat_id,
+        text=fm["text"],
+        parse_mode=ParseMode.HTML,
+    )
+
+    mark_first_move_sent(state, cid, time.time())
 
             # ------------------------------
             # CONFIRM-LIGHT (15m)
