@@ -6,27 +6,30 @@ from telegram.ext import Application
 from config import Settings
 from cmc import CMCClient, age_days
 from sheets import SheetsClient, now_iso_utc
-from state import load_state, save_state, seen_ids, mark_seen
-from signals import check_confirm_light
+from state import (
+    load_state,
+    save_state,
+    seen_ids,
+    mark_seen,
+    tracked_ids,
+    mark_tracked,
+)
 
-from confirm_sender import send_to_confirm_engine
-from candles_bybit import get_candles_5m
-
-CONFIRM_URL = "https://web-production-2e833.up.railway.app/webhook/listing"
-
-
-# ==================================================
+# --------------------------------------------------
 # ОСНОВНОЙ СКАН
-# ==================================================
+# --------------------------------------------------
 
 async def scan_once(app, settings, cmc, sheets):
     state = load_state()
+
     seen = seen_ids(state)
+    tracked = tracked_ids(state)
 
     coins = cmc.fetch_recent_listings(limit=settings.limit)
 
     sent_ultra = 0
-    sent_confirm_light = 0
+    sent_tracked = 0
+
     now_ts = time.time()
 
     for coin in coins:
@@ -53,8 +56,9 @@ async def scan_once(app, settings, cmc, sheets):
             "ts": now_ts,
         }
 
-        # ---------------- GOOGLE SHEETS ----------------
-
+        # ------------------------------
+        # GOOGLE SHEETS (лог)
+        # ------------------------------
         sheets.buffer_append({
             "detected_at": now_iso_utc(),
             "cmc_id": cid,
@@ -68,91 +72,49 @@ async def scan_once(app, settings, cmc, sheets):
             "comment": "",
         })
 
-        # ---------------- ULTRA-EARLY ----------------
-
+        # ------------------------------
+        # ULTRA-EARLY → TRACK MODE
+        # ------------------------------
         if age is not None and age <= 1 and vol >= 500_000:
             if cid not in seen:
+                text = (
+                    "⚡ <b>ULTRA-EARLY</b>\n\n"
+                    f"<b>{token['name']}</b> ({token['symbol']})\n"
+                    f"Возраст: {age} дн\n"
+                    f"Market Cap: ${mcap:,.0f}\n"
+                    f"Volume 24h: ${vol:,.0f}\n\n"
+                    "👀 Добавлен в TRACK MODE\n"
+                    "⏳ Ждём появления торгов"
+                )
+
                 await app.bot.send_message(
                     chat_id=settings.chat_id,
-                    text=(
-                        f"⚡ ULTRA-EARLY\n\n"
-                        f"<b>{token['name']}</b> ({token['symbol']})\n"
-                        f"Возраст: {age} дн\n"
-                        f"Market Cap: ${mcap:,.0f}\n"
-                        f"Volume 24h: ${vol:,.0f}\n\n"
-                        f"🔍 Отбор, не вход"
-                    ),
+                    text=text,
                     parse_mode=ParseMode.HTML,
                 )
 
-                sent_ultra += 1
                 mark_seen(state, cid)
+                mark_tracked(state, cid)
 
-                # ---------- CONFIRM / ENTRY ENGINE ----------
-                candles = get_candles_5m(token["symbol"], limit=30)
-
-                if candles:
-                    payload = {
-                        "symbol": token["symbol"],
-                        "exchange": "BYBIT",
-                        "tf": "5m",
-                        "mode_hint": "FIRST_MOVE",
-                        "candles": candles,
-                    }
-
-                    try:
-                        send_to_confirm_engine(payload, CONFIRM_URL)
-                    except Exception:
-                        pass  # тихо, без мусора
-
-        # ---------------- CONFIRM-LIGHT ----------------
-
-        prev_snapshot = state.get("snapshots", {}).get(str(cid))
-        confirm_light = check_confirm_light(token, prev_snapshot)
-
-        if confirm_light:
-            await app.bot.send_message(
-                chat_id=settings.chat_id,
-                text=(
-                    f"🟢 CONFIRM-LIGHT\n\n"
-                    f"<b>{token['name']}</b> ({token['symbol']})\n"
-                    f"Возраст: {confirm_light['age_min']} мин\n"
-                    f"Рост объёма: x{confirm_light['volume_x']}\n"
-                    f"Интервал: {confirm_light['minutes']} мин\n\n"
-                    f"⚠️ Ранний вход (малый объём)"
-                ),
-                parse_mode=ParseMode.HTML,
-            )
-
-            sent_confirm_light += 1
-
-        # ---------------- SNAPSHOT ----------------
-
-        state.setdefault("snapshots", {})[str(cid)] = {
-            "volume_24h": vol,
-            "price": price,
-            "ts": now_ts,
-        }
+                sent_ultra += 1
+                sent_tracked += 1
 
     sheets.flush()
     save_state(state)
 
+    # ------------------------------
+    # ИТОГ
+    # ------------------------------
     if sent_ultra:
         await app.bot.send_message(
             chat_id=settings.chat_id,
-            text=f"✅ ULTRA сигналов: {sent_ultra}",
-        )
-
-    if sent_confirm_light:
-        await app.bot.send_message(
-            chat_id=settings.chat_id,
-            text=f"🟢 CONFIRM-LIGHT сигналов: {sent_confirm_light}",
+            text=f"✅ ULTRA найдено: {sent_ultra}\n👀 В TRACK MODE: {sent_tracked}",
         )
 
 
-# ==================================================
+# --------------------------------------------------
 # MAIN LOOP
-# ==================================================
+# --------------------------------------------------
 
 async def main():
     settings = Settings.load()
@@ -172,8 +134,8 @@ async def main():
         chat_id=settings.chat_id,
         text=(
             "📡 Listings Radar запущен\n"
-            "Telegram = ULTRA / CONFIRM-LIGHT\n"
-            "🆕 → Google Sheets (batch)"
+            "Режим: ULTRA → TRACK\n"
+            "🆕 → Google Sheets"
         ),
     )
 
@@ -191,3 +153,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
