@@ -9,7 +9,7 @@ from sheets import SheetsClient, now_iso_utc
 from state import load_state, save_state, seen_ids, mark_seen
 
 from signals import check_confirm_light
-
+CONFIRM_URL = "https://web-production-2e833.up.railway.app/webhook/listing"
 
 # --------------------------------------------------
 # ОСНОВНОЙ СКАН
