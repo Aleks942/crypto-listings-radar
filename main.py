@@ -128,7 +128,7 @@ async def scan_once(app, settings, cmc, sheets):
                 parse_mode=ParseMode.HTML,
             )
 
-            # ------------------------------
+                   # ------------------------------
             # FIRST MOVE (5m)
             # ------------------------------
             candles_5m = []
@@ -139,21 +139,21 @@ async def scan_once(app, settings, cmc, sheets):
 
             FIRST_COOLDOWN = 60 * 60  # 1 час
 
-            fm = first_move_eval(token["symbol"], candles_5m)
+            if candles_5m:
+                fm = first_move_eval(token["symbol"], candles_5m)
 
-if (
-    candles_5m
-    and fm.get("ok")
-    and not first_move_sent(state, cid)
-    and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN)
-):
-    await app.bot.send_message(
-        chat_id=settings.chat_id,
-        text=fm["text"],
-        parse_mode=ParseMode.HTML,
-    )
+                if (
+                    fm.get("ok")
+                    and not first_move_sent(state, cid)
+                    and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN)
+                ):
+                    await app.bot.send_message(
+                        chat_id=settings.chat_id,
+                        text=fm["text"],
+                        parse_mode=ParseMode.HTML,
+                    )
 
-    mark_first_move_sent(state, cid, time.time())
+                    mark_first_move_sent(state, cid, time.time())
 
             # ------------------------------
             # CONFIRM-LIGHT (15m)
@@ -166,25 +166,22 @@ if (
 
             CONFIRM_COOLDOWN = 2 * 60 * 60  # 2 часа
 
-            if (
-                candles_15m
-                and confirm_light_signal(candles_15m)
-                and not confirm_light_sent(state, cid)
-                and confirm_light_cooldown_ok(state, cid, CONFIRM_COOLDOWN)
-            ):
-                await app.bot.send_message(
-                    chat_id=settings.chat_id,
-                    text=(
-                        "🟡 <b>CONFIRM-LIGHT</b>\n\n"
-                        f"<b>{token['name']}</b> ({token['symbol']})\n"
-                        "TF: 15m\n\n"
-                        "Коррекция удержана\n"
-                        "📉 Риск ниже, чем FIRST MOVE"
-                    ),
-                    parse_mode=ParseMode.HTML,
-                )
+            if candles_15m:
+                cl = confirm_light_eval(token["symbol"], candles_15m)
 
-                mark_confirm_light_sent(state, cid, time.time())
+                if (
+                    cl.get("ok")
+                    and not confirm_light_sent(state, cid)
+                    and confirm_light_cooldown_ok(state, cid, CONFIRM_COOLDOWN)
+                ):
+                    await app.bot.send_message(
+                        chat_id=settings.chat_id,
+                        text=cl["text"],
+                        parse_mode=ParseMode.HTML,
+                    )
+
+                    mark_confirm_light_sent(state, cid, time.time())
+
 
     sheets.flush()
     save_state(state)
