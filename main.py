@@ -7,9 +7,11 @@ from config import Settings
 from cmc import CMCClient, age_days
 from sheets import SheetsClient, now_iso_utc
 from state import load_state, save_state, seen_ids, mark_seen
-
 from signals import check_confirm_light
+
+from confirm_sender import send_to_confirm_engine   # ✅ ТУТ
 CONFIRM_URL = "https://web-production-2e833.up.railway.app/webhook/listing"
+
 
 # --------------------------------------------------
 # ОСНОВНОЙ СКАН
@@ -70,7 +72,7 @@ async def scan_once(app, settings, cmc, sheets):
         # --------------------------------------------------
         # ULTRA-EARLY (первый отбор)
         # --------------------------------------------------
-from confirm_sender import send_to_confirm_engine
+
 
         if age is not None and age <= 1 and vol >= 500_000:
             if cid not in seen:
