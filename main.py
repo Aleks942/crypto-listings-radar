@@ -10,6 +10,8 @@ from state import load_state, save_state, seen_ids, mark_seen
 from signals import check_confirm_light
 
 from confirm_sender import send_to_confirm_engine
+from candles_bybit import get_candles_5m
+
 
 CONFIRM_URL = "https://web-production-2e833.up.railway.app/webhook/listing"
 
