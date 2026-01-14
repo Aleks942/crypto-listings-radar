@@ -85,10 +85,12 @@ async def scan_once(app, settings, cmc, sheets):
                     f"🔍 Отбор, не вход"
                 )
 
-                await app.bot.send_message(
-                    chat_id=settings.chat_id,
-                    text=text,
-                    parse_mode=ParseMode.MARKDOWN,
+               await app.bot.send_message(
+    chat_id=settings.chat_id,
+    text=text,
+    parse_mode=ParseMode.HTML,
+)
+
                 )
 
                 sent_ultra += 1
