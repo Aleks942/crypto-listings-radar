@@ -22,8 +22,9 @@ from state import (
 )
 
 from detect_trading import check_binance, check_bybit
-from first_move import first_move_signal
-from confirm_light import confirm_light_signal
+from first_move import first_move_eval
+from confirm_light import confirm_light_eval
+
 from candles_binance import (
     get_candles_5m as get_binance_5m,
     get_candles_15m as get_binance_15m,
