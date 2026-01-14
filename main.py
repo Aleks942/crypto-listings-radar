@@ -2,10 +2,6 @@ import asyncio
 import time
 from telegram.constants import ParseMode
 from telegram.ext import Application
-from confirm_light import confirm_light_signal
-from state import confirm_light_sent, mark_confirm_light_sent, confirm_light_cooldown_ok
-from candles_binance import get_candles_15m as get_binance_15m
-from candles_bybit import get_candles_15m as get_bybit_15m
 
 from config import Settings
 from cmc import CMCClient, age_days
@@ -17,6 +13,24 @@ from state import (
     mark_seen,
     tracked_ids,
     mark_tracked,
+    first_move_sent,
+    mark_first_move_sent,
+    first_move_cooldown_ok,
+    confirm_light_sent,
+    mark_confirm_light_sent,
+    confirm_light_cooldown_ok,
+)
+
+from detect_trading import check_binance, check_bybit
+from first_move import first_move_signal
+from confirm_light import confirm_light_signal
+from candles_binance import (
+    get_candles_5m as get_binance_5m,
+    get_candles_15m as get_binance_15m,
+)
+from candles_bybit import (
+    get_candles_5m as get_bybit_5m,
+    get_candles_15m as get_bybit_15m,
 )
 
 # --------------------------------------------------
@@ -30,9 +44,6 @@ async def scan_once(app, settings, cmc, sheets):
     tracked = tracked_ids(state)
 
     coins = cmc.fetch_recent_listings(limit=settings.limit)
-
-    sent_ultra = 0
-    sent_tracked = 0
 
     now_ts = time.time()
 
@@ -81,39 +92,105 @@ async def scan_once(app, settings, cmc, sheets):
         # ------------------------------
         if age is not None and age <= 1 and vol >= 500_000:
             if cid not in seen:
-                text = (
-                    "⚡ <b>ULTRA-EARLY</b>\n\n"
-                    f"<b>{token['name']}</b> ({token['symbol']})\n"
-                    f"Возраст: {age} дн\n"
-                    f"Market Cap: ${mcap:,.0f}\n"
-                    f"Volume 24h: ${vol:,.0f}\n\n"
-                    "👀 Добавлен в TRACK MODE\n"
-                    "⏳ Ждём появления торгов"
-                )
-
                 await app.bot.send_message(
                     chat_id=settings.chat_id,
-                    text=text,
+                    text=(
+                        "⚡ <b>ULTRA-EARLY</b>\n\n"
+                        f"<b>{token['name']}</b> ({token['symbol']})\n"
+                        f"Возраст: {age} дн\n"
+                        f"Market Cap: ${mcap:,.0f}\n"
+                        f"Volume 24h: ${vol:,.0f}\n\n"
+                        "👀 Добавлен в TRACK MODE\n"
+                        "⏳ Ждём появления торгов"
+                    ),
                     parse_mode=ParseMode.HTML,
                 )
 
                 mark_seen(state, cid)
                 mark_tracked(state, cid)
 
-                sent_ultra += 1
-                sent_tracked += 1
+        # ------------------------------
+        # TRACK → DETECT TRADING
+        # ------------------------------
+        if cid in tracked:
+            binance_ok = check_binance(token["symbol"])
+            bybit_ok = check_bybit(token["symbol"])
+
+            await app.bot.send_message(
+                chat_id=settings.chat_id,
+                text=(
+                    "🟣 <b>TRACK UPDATE</b>\n\n"
+                    f"<b>{token['name']}</b> ({token['symbol']})\n"
+                    f"BINANCE: {'✅' if binance_ok else '❌'}\n"
+                    f"BYBIT: {'✅' if bybit_ok else '❌'}"
+                ),
+                parse_mode=ParseMode.HTML,
+            )
+
+            # ------------------------------
+            # FIRST MOVE (5m)
+            # ------------------------------
+            candles_5m = []
+            if binance_ok:
+                candles_5m = get_binance_5m(token["symbol"])
+            elif bybit_ok:
+                candles_5m = get_bybit_5m(token["symbol"])
+
+            FIRST_COOLDOWN = 60 * 60  # 1 час
+
+            if (
+                candles_5m
+                and first_move_signal(candles_5m)
+                and not first_move_sent(state, cid)
+                and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN)
+            ):
+                await app.bot.send_message(
+                    chat_id=settings.chat_id,
+                    text=(
+                        "🟢 <b>FIRST MOVE</b>\n\n"
+                        f"<b>{token['name']}</b> ({token['symbol']})\n"
+                        "TF: 5m\n\n"
+                        "Импульс подтверждён\n"
+                        "⚠️ Ранний вход (высокий риск)"
+                    ),
+                    parse_mode=ParseMode.HTML,
+                )
+
+                mark_first_move_sent(state, cid, time.time())
+
+            # ------------------------------
+            # CONFIRM-LIGHT (15m)
+            # ------------------------------
+            candles_15m = []
+            if binance_ok:
+                candles_15m = get_binance_15m(token["symbol"])
+            elif bybit_ok:
+                candles_15m = get_bybit_15m(token["symbol"])
+
+            CONFIRM_COOLDOWN = 2 * 60 * 60  # 2 часа
+
+            if (
+                candles_15m
+                and confirm_light_signal(candles_15m)
+                and not confirm_light_sent(state, cid)
+                and confirm_light_cooldown_ok(state, cid, CONFIRM_COOLDOWN)
+            ):
+                await app.bot.send_message(
+                    chat_id=settings.chat_id,
+                    text=(
+                        "🟡 <b>CONFIRM-LIGHT</b>\n\n"
+                        f"<b>{token['name']}</b> ({token['symbol']})\n"
+                        "TF: 15m\n\n"
+                        "Коррекция удержана\n"
+                        "📉 Риск ниже, чем FIRST MOVE"
+                    ),
+                    parse_mode=ParseMode.HTML,
+                )
+
+                mark_confirm_light_sent(state, cid, time.time())
 
     sheets.flush()
     save_state(state)
-
-    # ------------------------------
-    # ИТОГ
-    # ------------------------------
-    if sent_ultra:
-        await app.bot.send_message(
-            chat_id=settings.chat_id,
-            text=f"✅ ULTRA найдено: {sent_ultra}\n👀 В TRACK MODE: {sent_tracked}",
-        )
 
 
 # --------------------------------------------------
@@ -138,7 +215,7 @@ async def main():
         chat_id=settings.chat_id,
         text=(
             "📡 Listings Radar запущен\n"
-            "Режим: ULTRA → TRACK\n"
+            "Режим: ULTRA → TRACK → FIRST → CONFIRM\n"
             "🆕 → Google Sheets"
         ),
     )
