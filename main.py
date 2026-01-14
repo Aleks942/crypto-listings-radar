@@ -15,9 +15,9 @@ from candles_bybit import get_candles_5m
 CONFIRM_URL = "https://web-production-2e833.up.railway.app/webhook/listing"
 
 
-# --------------------------------------------------
+# ==================================================
 # ОСНОВНОЙ СКАН
-# --------------------------------------------------
+# ==================================================
 
 async def scan_once(app, settings, cmc, sheets):
     state = load_state()
@@ -27,7 +27,6 @@ async def scan_once(app, settings, cmc, sheets):
 
     sent_ultra = 0
     sent_confirm_light = 0
-
     now_ts = time.time()
 
     for coin in coins:
@@ -90,7 +89,10 @@ async def scan_once(app, settings, cmc, sheets):
                 mark_seen(state, cid)
 
                 # ---------- CONFIRM / ENTRY ENGINE ----------
-                candles = get_candles_5m(token["symbol"], limit=30)
+                try:
+                    candles = get_candles_5m(token["symbol"], limit=30)
+                except Exception:
+                    candles = []
 
                 if candles:
                     payload = {
@@ -103,11 +105,8 @@ async def scan_once(app, settings, cmc, sheets):
 
                     try:
                         send_to_confirm_engine(payload, CONFIRM_URL)
-                    except Exception as e:
-                        await app.bot.send_message(
-                            chat_id=settings.chat_id,
-                            text=f"⚠️ Confirm-engine error: {e}",
-                        )
+                    except Exception:
+                        pass  # никаких ошибок в Telegram
 
         # ---------------- CONFIRM-LIGHT ----------------
 
@@ -154,9 +153,9 @@ async def scan_once(app, settings, cmc, sheets):
         )
 
 
-# --------------------------------------------------
+# ==================================================
 # MAIN LOOP
-# --------------------------------------------------
+# ==================================================
 
 async def main():
     settings = Settings.load()
@@ -195,3 +194,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
