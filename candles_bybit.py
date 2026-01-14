@@ -4,9 +4,8 @@ BASE_URL = "https://api.bybit.com"
 
 def get_candles_5m(symbol: str, limit: int = 30) -> list[dict]:
     """
-    Пытаемся взять SPOT свечи Bybit для пары SYMBOLUSDT (например, BTCUSDT).
-    Возвращаем список свечей в формате confirm-engine:
-    [{"o":..,"h":..,"l":..,"c":..,"v":..}, ...] (старые -> новые)
+    Берём 5m свечи SPOT с Bybit.
+    Если пары нет или Bybit ругается — возвращаем [].
     """
     url = f"{BASE_URL}/v5/market/kline"
     params = {
@@ -16,9 +15,12 @@ def get_candles_5m(symbol: str, limit: int = 30) -> list[dict]:
         "limit": limit,
     }
 
-    r = requests.get(url, params=params, timeout=10)
-    r.raise_for_status()
-    data = r.json()
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+    except Exception:
+        return []
 
     if data.get("retCode") != 0:
         return []
@@ -28,9 +30,7 @@ def get_candles_5m(symbol: str, limit: int = 30) -> list[dict]:
         return []
 
     candles = []
-    # Bybit отдаёт новые -> старые, нам надо старые -> новые
-    for k in reversed(klines):
-        # формат: [startTime, open, high, low, close, volume, turnover]
+    for k in reversed(klines):  # старые → новые
         candles.append({
             "o": float(k[1]),
             "h": float(k[2]),
