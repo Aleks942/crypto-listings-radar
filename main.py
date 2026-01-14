@@ -89,10 +89,7 @@ async def scan_once(app, settings, cmc, sheets):
                 mark_seen(state, cid)
 
                 # ---------- CONFIRM / ENTRY ENGINE ----------
-                try:
-                    candles = get_candles_5m(token["symbol"], limit=30)
-                except Exception:
-                    candles = []
+                candles = get_candles_5m(token["symbol"], limit=30)
 
                 if candles:
                     payload = {
@@ -106,7 +103,7 @@ async def scan_once(app, settings, cmc, sheets):
                     try:
                         send_to_confirm_engine(payload, CONFIRM_URL)
                     except Exception:
-                        pass  # никаких ошибок в Telegram
+                        pass  # тихо, без мусора
 
         # ---------------- CONFIRM-LIGHT ----------------
 
@@ -194,4 +191,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
