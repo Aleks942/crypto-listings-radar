@@ -117,4 +117,19 @@ def clear_trade(state: Dict[str, Any], cid: int) -> None:
 # ---------- FIRST MOVE SENT (антидубликат) ----------
 def first_move_sent(state: dict, cid: int) -> bool:
     ...
+# ---------- CONFIRM LIGHT SENT (антидубликат) ----------
+def confirm_light_sent(state: dict, cid: int) -> bool:
+    return str(cid) in (state.get("confirm_light_sent") or {})
+
+
+def mark_confirm_light_sent(state: dict, cid: int, ts: float) -> None:
+    state.setdefault("confirm_light_sent", {})
+    state["confirm_light_sent"][str(cid)] = ts
+
+
+def confirm_light_cooldown_ok(state: dict, cid: int, cooldown_sec: int) -> bool:
+    sent = (state.get("confirm_light_sent") or {}).get(str(cid))
+    if not sent:
+        return True
+    return (time.time() - float(sent)) >= cooldown_sec
 
