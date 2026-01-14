@@ -70,6 +70,7 @@ async def scan_once(app, settings, cmc, sheets):
         # --------------------------------------------------
         # ULTRA-EARLY (первый отбор)
         # --------------------------------------------------
+from confirm_sender import send_to_confirm_engine
 
         if age is not None and age <= 1 and vol >= 500_000:
             if cid not in seen:
