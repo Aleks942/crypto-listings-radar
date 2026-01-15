@@ -107,13 +107,18 @@ async def scan_once(app, settings, cmc, sheets):
                 mark_tracked(state, cid)
 
         # ------------------------------
-        # TRACK → ТОРГИ / СВЕЧИ
+        # TRACK → ТОРГИ
         # ------------------------------
         if cid not in tracked:
             continue
 
         binance_ok = check_binance(token["symbol"])
         bybit_ok = check_bybit(token["symbol"])
+
+        if not binance_ok and not bybit_ok:
+            continue
+
+        market = "Binance" if binance_ok else "Bybit"
 
         # ------------------------------
         # FIRST MOVE (5m)
@@ -127,7 +132,7 @@ async def scan_once(app, settings, cmc, sheets):
         FIRST_COOLDOWN = 60 * 60  # 1 час
 
         if candles_5m:
-            fm = first_move_eval(token["symbol"], candles_5m)
+            fm = first_move_eval(token["symbol"], candles_5m, market)
             if (
                 fm.get("ok")
                 and not first_move_sent(state, cid)
@@ -142,7 +147,11 @@ async def scan_once(app, settings, cmc, sheets):
 
         # ------------------------------
         # CONFIRM-LIGHT (15m)
+        # ТОЛЬКО если был FIRST MOVE
         # ------------------------------
+        if not first_move_sent(state, cid):
+            continue
+
         candles_15m = []
         if binance_ok:
             candles_15m = get_binance_15m(token["symbol"])
@@ -152,7 +161,7 @@ async def scan_once(app, settings, cmc, sheets):
         CONFIRM_COOLDOWN = 2 * 60 * 60  # 2 часа
 
         if candles_15m:
-            cl = confirm_light_eval(token["symbol"], candles_15m)
+            cl = confirm_light_eval(token["symbol"], candles_15m, market)
             if (
                 cl.get("ok")
                 and not confirm_light_sent(state, cid)
@@ -191,7 +200,7 @@ async def main():
         text=(
             "📡 Listings Radar запущен\n"
             "Цепочка: ULTRA → TRACK → FIRST MOVE → CONFIRM-LIGHT\n"
-            "🆕 → Google Sheets"
+            "SUMMARY MODE: ENTRY + EXIT + VERDICT"
         ),
         parse_mode=ParseMode.HTML,
     )
