@@ -7,15 +7,24 @@ from verdict import decide_verdict
 from summary_mode import build_summary_message
 
 
-def build_first_move_signal(
+def first_move_eval(
     symbol: str,
     candles_raw: List[Dict[str, Any]],
+    market: str,
 ) -> Dict[str, Any]:
     """
-    FIRST MOVE + SCORE + ENTRY/EXIT/SUMMARY/VERDICT
+    FIRST MOVE
+    SCORE → ENTRY → EXIT → VERDICT → SUMMARY
     """
 
-    # --- преобразуем свечи для SCORE ENGINE ---
+    # =============================
+    # 1. Подготовка свечей
+    # =============================
+
+    if not candles_raw or len(candles_raw) < 3:
+        return {"ok": False, "reason": "Недостаточно свечей"}
+
+    # --- для SCORE ENGINE ---
     candles = [
         Candle(
             o=c["o"],
@@ -27,28 +36,33 @@ def build_first_move_signal(
         for c in candles_raw
     ]
 
-    # --- свечи для ENTRY/EXIT модулей (адаптер ключей) ---
+    # --- для ENTRY / EXIT ---
     candles_for_plan = [
         {
             "open": c["o"],
             "high": c["h"],
-            "low":  c["l"],
+            "low": c["l"],
             "close": c["c"],
             "volume": c["v"],
         }
         for c in candles_raw
     ]
 
-    # --- считаем SCORE ---
+    # =============================
+    # 2. SCORE
+    # =============================
+
     score = score_market(candles)
 
-    # --- фильтр ---
     if score.letter == "C":
-        return {"ok": False, "reason": f"SCORE {score.letter} — {score.reason}"}
+        return {
+            "ok": False,
+            "reason": f"SCORE C — {score.reason}",
+        }
 
-    # --- базовые условия FIRST MOVE ---
-    if len(candles) < 3:
-        return {"ok": False, "reason": "Мало свечей для FIRST MOVE"}
+    # =============================
+    # 3. Базовый FIRST MOVE фильтр
+    # =============================
 
     last = candles[-1]
     prev = candles[-2]
@@ -56,13 +70,22 @@ def build_first_move_signal(
     impulse_ok = (last.h - last.l) >= 1.2 * (prev.h - prev.l)
     close_strong = last.c > (last.l + 0.5 * (last.h - last.l))
 
-    if not (impulse_ok and close_strong):
-        return {"ok": False, "reason": "Нет импульса или слабое закрытие"}
+    if not impulse_ok:
+        return {"ok": False, "reason": "Нет импульса"}
 
-    # === STEP 4: ENTRY WINDOW ===
+    if not close_strong:
+        return {"ok": False, "reason": "Слабое закрытие свечи"}
+
+    # =============================
+    # 4. ENTRY WINDOW
+    # =============================
+
     plan = build_entry_plan(candles_for_plan, tf="5m")
 
-    # === STEP 5: EXIT PLAN ===
+    # =============================
+    # 5. EXIT PLAN
+    # =============================
+
     exitp = build_exit_plan(
         entry=plan.entry,
         stop=plan.stop,
@@ -70,7 +93,10 @@ def build_first_move_signal(
         tf="5m",
     )
 
-    # === STEP 6.5: VERDICT ===
+    # =============================
+    # 6. VERDICT
+    # =============================
+
     ver = decide_verdict(
         score_grade=score.letter,
         entry_mode=plan.mode,
@@ -80,12 +106,19 @@ def build_first_move_signal(
     if ver.action == "SKIP":
         return {"ok": False, "reason": ver.reason}
 
-    score_details = [score.reason] if getattr(score, "reason", None) else []
-    risk_note = "EARLY / AGGRESSIVE (listing volatile). Follow plan, no FOMO."
+    # =============================
+    # 7. SUMMARY MESSAGE
+    # =============================
+
+    score_details = [score.reason] if score.reason else []
+
+    risk_note = "EARLY / AGGRESSIVE. Новый листинг — высокая волатильность."
+    if score.letter == "A" and plan.mode == "PULLBACK":
+        risk_note = "A-grade + pullback. Более контролируемый вход, но риск остаётся."
 
     text = build_summary_message(
         token=symbol,
-        market="Binance/Bybit",
+        market=market,
         stage="FIRST MOVE",
         tf="5m",
         score_grade=score.letter,
@@ -104,4 +137,8 @@ def build_first_move_signal(
         risk_note=risk_note,
     )
 
-    return {"ok": True, "score": score.letter, "text": text}
+    return {
+        "ok": True,
+        "score": score.letter,
+        "text": text,
+    }
