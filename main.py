@@ -6,6 +6,7 @@ from telegram.ext import Application
 from config import Settings
 from cmc import CMCClient, age_days
 from sheets import SheetsClient, now_iso_utc
+
 from state import (
     load_state,
     save_state,
@@ -36,9 +37,55 @@ from candles_bybit import (
     get_candles_15m as get_bybit_15m,
 )
 
-from liquidity import liquidity_gate
 from noise_filter import is_unverified_token, ALLOW_UNVERIFIED_TRACK
+from liquidity import liquidity_gate
 
+
+# =========================
+# helpers: safe send / safe flush
+# =========================
+
+def _is_broken_pipe(e: Exception) -> bool:
+    msg = str(e).lower()
+    return ("broken pipe" in msg) or ("errno 32" in msg)
+
+
+async def safe_send(app, chat_id: str, text: str, *, parse_mode=ParseMode.HTML, silent_on_broken_pipe: bool = False):
+    """
+    Отправка в Telegram с защитой от сетевых сбоев.
+    """
+    try:
+        await app.bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
+    except Exception as e:
+        # Broken pipe: иногда бывает при рестартах/сетевых обрывах. Не спамим.
+        if silent_on_broken_pipe and _is_broken_pipe(e):
+            return
+        # Для всего остального — пробуем повторить 1 раз
+        try:
+            await asyncio.sleep(2)
+            await app.bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
+        except Exception:
+            # тут уже просто молча
+            return
+
+
+def safe_sheets_flush(sheets: SheetsClient) -> None:
+    """
+    Flush с ретраем, чтобы не валиться от transient ошибок.
+    """
+    try:
+        sheets.flush()
+    except Exception:
+        try:
+            time.sleep(2)
+            sheets.flush()
+        except Exception:
+            return
+
+
+# =========================
+# scan loop
+# =========================
 
 async def scan_once(app, settings, cmc, sheets):
     state = load_state()
@@ -72,10 +119,17 @@ async def scan_once(app, settings, cmc, sheets):
         }
 
         # ------------------------------
-        # ULTRA-EARLY → TRACK MODE (с фильтром UNVERIFIED)
+        # ULTRA-EARLY 조건 (env-управляемо)
         # ------------------------------
-        ultra_ok = (age is not None and age <= settings.max_age_days and vol >= settings.min_volume_usd)
+        ultra_ok = (
+            age is not None
+            and age <= settings.max_age_days
+            and vol >= settings.min_volume_usd
+        )
 
+        # ------------------------------
+        # ULTRA-EARLY → TRACK MODE (+ UNVERIFIED фильтр)
+        # ------------------------------
         if ultra_ok:
             unverified, reason_uv = is_unverified_token({
                 "symbol": token["symbol"],
@@ -85,7 +139,7 @@ async def scan_once(app, settings, cmc, sheets):
                 "volume_24h": vol,
             })
 
-            # Лог в Sheets: разные статусы
+            # Sheets log
             sheets.buffer_append({
                 "detected_at": now_iso_utc(),
                 "cmc_id": cid,
@@ -99,31 +153,34 @@ async def scan_once(app, settings, cmc, sheets):
                 "comment": reason_uv if unverified else "",
             })
 
-            # Антидубликат ULTRA по seen
             if cid not in seen:
                 if unverified:
-                    # UNVERIFIED — по умолчанию НЕ добавляем в TRACK MODE
-                    await app.bot.send_message(
-                        chat_id=settings.chat_id,
-                        text=(
+                    await safe_send(
+                        app,
+                        settings.chat_id,
+                        (
                             "🟡 <b>ULTRA-EARLY (UNVERIFIED)</b>\n\n"
                             f"<b>{token['name']}</b> ({token['symbol']})\n"
                             f"Возраст: {age} дн\n"
                             f"Market Cap: ${mcap:,.0f}\n"
                             f"Volume 24h: ${vol:,.0f}\n\n"
                             f"Причина: {reason_uv}\n\n"
-                            + ("👀 Добавлен в TRACK MODE (ALLOW_UNVERIFIED_TRACK=1)\n" if ALLOW_UNVERIFIED_TRACK
-                               else "⛔ По умолчанию не трекаю. Если хочешь трекать — поставь ALLOW_UNVERIFIED_TRACK=1")
+                            + (
+                                "👀 Добавлен в TRACK MODE (ALLOW_UNVERIFIED_TRACK=1)\n"
+                                if ALLOW_UNVERIFIED_TRACK
+                                else "⛔ По умолчанию не трекаю. Если хочешь трекать — поставь ALLOW_UNVERIFIED_TRACK=1"
+                            )
                         ),
-                        parse_mode=ParseMode.HTML,
+                        silent_on_broken_pipe=True,
                     )
                     mark_seen(state, cid)
                     if ALLOW_UNVERIFIED_TRACK:
                         mark_tracked(state, cid)
                 else:
-                    await app.bot.send_message(
-                        chat_id=settings.chat_id,
-                        text=(
+                    await safe_send(
+                        app,
+                        settings.chat_id,
+                        (
                             "⚡ <b>ULTRA-EARLY</b>\n\n"
                             f"<b>{token['name']}</b> ({token['symbol']})\n"
                             f"Возраст: {age} дн\n"
@@ -132,13 +189,12 @@ async def scan_once(app, settings, cmc, sheets):
                             "👀 Добавлен в TRACK MODE\n"
                             "⏳ Ждём появления торгов"
                         ),
-                        parse_mode=ParseMode.HTML,
+                        silent_on_broken_pipe=True,
                     )
                     mark_seen(state, cid)
                     mark_tracked(state, cid)
-
         else:
-            # Если не ULTRA — всё равно логируем как “NEW” (по желанию можно отключить)
+            # логируем и пропускаем
             sheets.buffer_append({
                 "detected_at": now_iso_utc(),
                 "cmc_id": cid,
@@ -176,16 +232,20 @@ async def scan_once(app, settings, cmc, sheets):
         if market == "BINANCE":
             candles_5m = get_binance_5m(token["symbol"])
             candles_15m = get_binance_15m(token["symbol"])
-        elif market == "BYBIT":
+        else:
             candles_5m = get_bybit_5m(token["symbol"])
             candles_15m = get_bybit_15m(token["symbol"])
 
-        ok_liq, _liq = liquidity_gate(token["symbol"], market, candles_5m, candles_15m)
+        # Ликвидность / минимальные условия
+        ok_liq, _liq_meta = liquidity_gate(token["symbol"], market, candles_5m, candles_15m)
         if not ok_liq:
             continue
 
+        # ------------------------------
         # FIRST MOVE (5m)
-        FIRST_COOLDOWN = 60 * 60
+        # ------------------------------
+        FIRST_COOLDOWN = 60 * 60  # 1 час
+
         if candles_5m:
             fm = first_move_eval(token["symbol"], candles_5m)
             if (
@@ -193,15 +253,19 @@ async def scan_once(app, settings, cmc, sheets):
                 and not first_move_sent(state, cid)
                 and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN)
             ):
-                await app.bot.send_message(
-                    chat_id=settings.chat_id,
-                    text=fm["text"],
-                    parse_mode=ParseMode.HTML,
+                await safe_send(
+                    app,
+                    settings.chat_id,
+                    fm["text"],
+                    silent_on_broken_pipe=True,
                 )
                 mark_first_move_sent(state, cid, time.time())
 
+        # ------------------------------
         # CONFIRM-LIGHT (15m)
-        CONFIRM_COOLDOWN = 2 * 60 * 60
+        # ------------------------------
+        CONFIRM_COOLDOWN = 2 * 60 * 60  # 2 часа
+
         if candles_15m:
             cl = confirm_light_eval(token["symbol"], candles_15m)
             if (
@@ -209,16 +273,22 @@ async def scan_once(app, settings, cmc, sheets):
                 and not confirm_light_sent(state, cid)
                 and confirm_light_cooldown_ok(state, cid, CONFIRM_COOLDOWN)
             ):
-                await app.bot.send_message(
-                    chat_id=settings.chat_id,
-                    text=cl["text"],
-                    parse_mode=ParseMode.HTML,
+                await safe_send(
+                    app,
+                    settings.chat_id,
+                    cl["text"],
+                    silent_on_broken_pipe=True,
                 )
                 mark_confirm_light_sent(state, cid, time.time())
 
-    sheets.flush()
+    # flush & persist
+    safe_sheets_flush(sheets)
     save_state(state)
 
+
+# =========================
+# main
+# =========================
 
 async def main():
     settings = Settings.load()
@@ -234,17 +304,19 @@ async def main():
     await app.initialize()
     await app.start()
 
+    # startup-guard: не чаще 1 раза в час
     state = load_state()
     if not startup_sent_recent(state, cooldown_sec=3600):
-        await app.bot.send_message(
-            chat_id=settings.chat_id,
-            text=(
+        await safe_send(
+            app,
+            settings.chat_id,
+            (
                 "📡 Listings Radar запущен\n"
                 "Цепочка: ULTRA → TRACK → FIRST MOVE → CONFIRM-LIGHT\n"
                 "SUMMARY: ENTRY + EXIT + VERDICT\n"
-                f"DEBUG: {'ON' if getattr(settings, 'debug', False) else 'OFF'}"
+                "DEBUG: OFF"
             ),
-            parse_mode=ParseMode.HTML,
+            silent_on_broken_pipe=True,
         )
         mark_startup_sent(state)
         save_state(state)
@@ -253,9 +325,12 @@ async def main():
         try:
             await scan_once(app, settings, cmc, sheets)
         except Exception as e:
-            await app.bot.send_message(chat_id=settings.chat_id, text=f"❌ Ошибка: {e}")
+            # Broken pipe не шлём, всё остальное — да (одним сообщением)
+            if not _is_broken_pipe(e):
+                await safe_send(app, settings.chat_id, f"❌ Ошибка: {e}", parse_mode=None)
         await asyncio.sleep(settings.check_interval_min * 60)
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+
