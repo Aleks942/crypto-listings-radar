@@ -8,41 +8,37 @@ STATE_DIR = os.getenv("STATE_DIR", ".")
 STATE_FILE = os.path.join(STATE_DIR, "state.json")
 
 
-# -----------------------------
-# I/O
-# -----------------------------
-
 def load_state() -> Dict[str, Any]:
     os.makedirs(STATE_DIR, exist_ok=True)
+
+    default = {
+        "seen": {},
+        "tracked": {},
+        "first_move": {},
+        "confirm_light": {},
+        "track_debug": {},
+        "liq_debug": {},
+        "startup": {},
+    }
+
     if not os.path.exists(STATE_FILE):
-        return {
-            "seen": {},
-            "tracked": {},
-            "first_move": {},
-            "confirm_light": {},
-            "track_debug": {},
-        }
+        return default
+
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
+            data = json.load(f) or {}
 
-        # страховка структуры
         data.setdefault("seen", {})
         data.setdefault("tracked", {})
         data.setdefault("first_move", {})
         data.setdefault("confirm_light", {})
         data.setdefault("track_debug", {})
+        data.setdefault("liq_debug", {})
+        data.setdefault("startup", {})
 
         return data
     except Exception:
-        # если файл битый — начинаем заново, но не падаем
-        return {
-            "seen": {},
-            "tracked": {},
-            "first_move": {},
-            "confirm_light": {},
-            "track_debug": {},
-        }
+        return default
 
 
 def save_state(state: Dict[str, Any]) -> None:
@@ -120,3 +116,20 @@ def confirm_light_cooldown_ok(state: Dict[str, Any], cid: int, cooldown_sec: int
     last_ts = float(cl.get("ts") or 0)
     return (time.time() - last_ts) >= float(cooldown_sec)
 
+
+# -----------------------------
+# STARTUP guard (anti-duplicate "bot started")
+# -----------------------------
+
+def startup_sent_recent(state: Dict[str, Any], cooldown_sec: int = 3600) -> bool:
+    state.setdefault("startup", {})
+    rec = state["startup"].get("last")
+    if not rec:
+        return False
+    last_ts = float(rec.get("ts") or 0)
+    return (time.time() - last_ts) < float(cooldown_sec)
+
+
+def mark_startup_sent(state: Dict[str, Any]) -> None:
+    state.setdefault("startup", {})
+    state["startup"]["last"] = {"ts": time.time()}
