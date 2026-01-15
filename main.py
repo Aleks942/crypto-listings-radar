@@ -89,6 +89,8 @@ print(f"[SCAN] fetched {len(coins)} coins from CMC")
         # ------------------------------
         # ULTRA-EARLY → TRACK MODE
         # ------------------------------
+        print(f"[ULTRA] {token['symbol']} age={age} vol={vol:,.0f}")
+
         if age is not None and age <= 1 and vol >= 500_000:
             if cid not in seen:
                 await app.bot.send_message(
