@@ -1,4 +1,5 @@
 import asyncio
+import os
 import time
 from telegram.constants import ParseMode
 from telegram.ext import Application
@@ -51,28 +52,19 @@ def _is_broken_pipe(e: Exception) -> bool:
 
 
 async def safe_send(app, chat_id: str, text: str, *, parse_mode=ParseMode.HTML, silent_on_broken_pipe: bool = False):
-    """
-    Отправка в Telegram с защитой от сетевых сбоев.
-    """
     try:
         await app.bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
     except Exception as e:
-        # Broken pipe: иногда бывает при рестартах/сетевых обрывах. Не спамим.
         if silent_on_broken_pipe and _is_broken_pipe(e):
             return
-        # Для всего остального — пробуем повторить 1 раз
         try:
             await asyncio.sleep(2)
             await app.bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
         except Exception:
-            # тут уже просто молча
             return
 
 
 def safe_sheets_flush(sheets: SheetsClient) -> None:
-    """
-    Flush с ретраем, чтобы не валиться от transient ошибок.
-    """
     try:
         sheets.flush()
     except Exception:
@@ -84,11 +76,88 @@ def safe_sheets_flush(sheets: SheetsClient) -> None:
 
 
 # =========================
+# TRACK TTL (auto cleanup)
+# =========================
+
+def _track_ttl_seconds() -> int:
+    # можно управлять env: TRACK_TTL_HOURS, по умолчанию 24 часа
+    hrs = os.getenv("TRACK_TTL_HOURS", "24").strip()
+    try:
+        h = int(hrs)
+    except Exception:
+        h = 24
+    h = max(1, min(h, 72))  # 1..72
+    return h * 3600
+
+
+async def cleanup_tracked(app, settings, state) -> None:
+    """
+    Удаляет из TRACK токены, которые висят слишком долго без результата.
+    Храним метадату в state["tracked_meta"] = {cid: {ts, symbol, name}}
+    """
+    ttl_sec = _track_ttl_seconds()
+    now = time.time()
+
+    tracked_list = list(state.get("tracked", []))
+    if not tracked_list:
+        return
+
+    meta = state.setdefault("tracked_meta", {})
+
+    kept = []
+    expired = []
+
+    for cid in tracked_list:
+        cid_int = int(cid)
+        key = str(cid_int)
+        m = meta.get(key) or {}
+
+        ts = float(m.get("ts") or 0.0)
+        if ts <= 0:
+            # если раньше не писали — ставим "сейчас"
+            ts = now
+            m["ts"] = ts
+            meta[key] = m
+
+        if (now - ts) > ttl_sec:
+            expired.append((cid_int, m.get("name") or "", m.get("symbol") or f"#{cid_int}"))
+        else:
+            kept.append(cid_int)
+
+    if expired:
+        # аккуратно: отправляем максимум 10 сообщений за один проход
+        for cid_int, name, sym in expired[:10]:
+            await safe_send(
+                app,
+                settings.chat_id,
+                (
+                    "🧹 <b>TRACK EXPIRED</b>\n\n"
+                    f"{name} ({sym})\n"
+                    f"Причина: нет торгов/сигналов в течение {ttl_sec // 3600}ч\n"
+                    "Действие: удалён из TRACK"
+                ),
+                silent_on_broken_pipe=True,
+            )
+            meta.pop(str(cid_int), None)
+
+        # если было больше 10 — остальные удалим молча, чтобы не спамить
+        for cid_int, _, _ in expired[10:]:
+            meta.pop(str(cid_int), None)
+
+        state["tracked"] = sorted(set(kept))
+        state["tracked_meta"] = meta
+
+
+# =========================
 # scan loop
 # =========================
 
 async def scan_once(app, settings, cmc, sheets):
     state = load_state()
+
+    # 1) перед сканом — чистим TRACK
+    await cleanup_tracked(app, settings, state)
+
     seen = seen_ids(state)
     tracked = tracked_ids(state)
 
@@ -119,7 +188,7 @@ async def scan_once(app, settings, cmc, sheets):
         }
 
         # ------------------------------
-        # ULTRA-EARLY 조건 (env-управляемо)
+        # ULTRA-EARLY conditions (env-driven via Settings)
         # ------------------------------
         ultra_ok = (
             age is not None
@@ -128,7 +197,7 @@ async def scan_once(app, settings, cmc, sheets):
         )
 
         # ------------------------------
-        # ULTRA-EARLY → TRACK MODE (+ UNVERIFIED фильтр)
+        # ULTRA-EARLY → TRACK MODE (+ UNVERIFIED filter)
         # ------------------------------
         if ultra_ok:
             unverified, reason_uv = is_unverified_token({
@@ -174,8 +243,12 @@ async def scan_once(app, settings, cmc, sheets):
                         silent_on_broken_pipe=True,
                     )
                     mark_seen(state, cid)
+
                     if ALLOW_UNVERIFIED_TRACK:
                         mark_tracked(state, cid)
+                        # track meta
+                        meta = state.setdefault("tracked_meta", {})
+                        meta[str(cid)] = {"ts": time.time(), "symbol": token["symbol"], "name": token["name"]}
                 else:
                     await safe_send(
                         app,
@@ -193,8 +266,13 @@ async def scan_once(app, settings, cmc, sheets):
                     )
                     mark_seen(state, cid)
                     mark_tracked(state, cid)
+
+                    # track meta
+                    meta = state.setdefault("tracked_meta", {})
+                    meta[str(cid)] = {"ts": time.time(), "symbol": token["symbol"], "name": token["name"]}
+
         else:
-            # логируем и пропускаем
+            # log + skip
             sheets.buffer_append({
                 "detected_at": now_iso_utc(),
                 "cmc_id": cid,
@@ -209,7 +287,7 @@ async def scan_once(app, settings, cmc, sheets):
             })
 
         # ------------------------------
-        # TRACK → ТОРГИ / СВЕЧИ
+        # TRACK → trading / candles
         # ------------------------------
         if cid not in tracked:
             continue
@@ -236,7 +314,7 @@ async def scan_once(app, settings, cmc, sheets):
             candles_5m = get_bybit_5m(token["symbol"])
             candles_15m = get_bybit_15m(token["symbol"])
 
-        # Ликвидность / минимальные условия
+        # liquidity gate
         ok_liq, _liq_meta = liquidity_gate(token["symbol"], market, candles_5m, candles_15m)
         if not ok_liq:
             continue
@@ -244,7 +322,7 @@ async def scan_once(app, settings, cmc, sheets):
         # ------------------------------
         # FIRST MOVE (5m)
         # ------------------------------
-        FIRST_COOLDOWN = 60 * 60  # 1 час
+        FIRST_COOLDOWN = 60 * 60  # 1 hour
 
         if candles_5m:
             fm = first_move_eval(token["symbol"], candles_5m)
@@ -264,7 +342,7 @@ async def scan_once(app, settings, cmc, sheets):
         # ------------------------------
         # CONFIRM-LIGHT (15m)
         # ------------------------------
-        CONFIRM_COOLDOWN = 2 * 60 * 60  # 2 часа
+        CONFIRM_COOLDOWN = 2 * 60 * 60  # 2 hours
 
         if candles_15m:
             cl = confirm_light_eval(token["symbol"], candles_15m)
@@ -281,7 +359,6 @@ async def scan_once(app, settings, cmc, sheets):
                 )
                 mark_confirm_light_sent(state, cid, time.time())
 
-    # flush & persist
     safe_sheets_flush(sheets)
     save_state(state)
 
@@ -304,7 +381,7 @@ async def main():
     await app.initialize()
     await app.start()
 
-    # startup-guard: не чаще 1 раза в час
+    # startup-guard: not more than 1 per hour
     state = load_state()
     if not startup_sent_recent(state, cooldown_sec=3600):
         await safe_send(
@@ -325,7 +402,6 @@ async def main():
         try:
             await scan_once(app, settings, cmc, sheets)
         except Exception as e:
-            # Broken pipe не шлём, всё остальное — да (одним сообщением)
             if not _is_broken_pipe(e):
                 await safe_send(app, settings.chat_id, f"❌ Ошибка: {e}", parse_mode=None)
         await asyncio.sleep(settings.check_interval_min * 60)
@@ -333,4 +409,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
