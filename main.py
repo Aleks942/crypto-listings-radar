@@ -131,6 +131,9 @@ print(f"[SCAN] fetched {len(coins)} coins from CMC")
             candles_5m = get_binance_5m(token["symbol"])
         elif bybit_ok:
             candles_5m = get_bybit_5m(token["symbol"])
+            if binance_ok or bybit_ok:
+    print(f"[TRADING] {token['symbol']} on {'Binance' if binance_ok else 'Bybit'}")
+
 
         FIRST_COOLDOWN = 60 * 60  # 1 час
 
