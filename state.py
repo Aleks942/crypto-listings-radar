@@ -20,15 +20,19 @@ def load_state() -> Dict[str, Any]:
             "tracked": {},
             "first_move": {},
             "confirm_light": {},
+            "track_debug": {},
         }
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
+
         # страховка структуры
         data.setdefault("seen", {})
         data.setdefault("tracked", {})
         data.setdefault("first_move", {})
         data.setdefault("confirm_light", {})
+        data.setdefault("track_debug", {})
+
         return data
     except Exception:
         # если файл битый — начинаем заново, но не падаем
@@ -37,6 +41,7 @@ def load_state() -> Dict[str, Any]:
             "tracked": {},
             "first_move": {},
             "confirm_light": {},
+            "track_debug": {},
         }
 
 
@@ -114,3 +119,4 @@ def confirm_light_cooldown_ok(state: Dict[str, Any], cid: int, cooldown_sec: int
         return True
     last_ts = float(cl.get("ts") or 0)
     return (time.time() - last_ts) >= float(cooldown_sec)
+
