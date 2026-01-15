@@ -9,36 +9,11 @@ STATE_FILE = os.path.join(STATE_DIR, "state.json")
 
 
 def load_state() -> Dict[str, Any]:
-    os.makedirs(STATE_DIR, exist_ok=True)
-
-    default = {
-        "seen": {},
-        "tracked": {},
-        "first_move": {},
-        "confirm_light": {},
-        "track_debug": {},
-        "liq_debug": {},
-        "startup": {},
-    }
-
-    if not os.path.exists(STATE_FILE):
-        return default
-
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f) or {}
-
-        data.setdefault("seen", {})
-        data.setdefault("tracked", {})
-        data.setdefault("first_move", {})
-        data.setdefault("confirm_light", {})
-        data.setdefault("track_debug", {})
-        data.setdefault("liq_debug", {})
-        data.setdefault("startup", {})
-
-        return data
+            return json.load(f)
     except Exception:
-        return default
+        return {}
 
 
 def save_state(state: Dict[str, Any]) -> None:
@@ -49,87 +24,80 @@ def save_state(state: Dict[str, Any]) -> None:
     os.replace(tmp, STATE_FILE)
 
 
-# -----------------------------
-# SEEN (ULTRA)
-# -----------------------------
+# -------------------------
+# SEEN / TRACKED
+# -------------------------
 
 def seen_ids(state: Dict[str, Any]) -> Set[int]:
-    return set(int(k) for k in (state.get("seen") or {}).keys())
+    return set(state.get("seen", []))
 
 
 def mark_seen(state: Dict[str, Any], cid: int) -> None:
-    state.setdefault("seen", {})
-    state["seen"][str(int(cid))] = {"ts": time.time()}
+    s = set(state.get("seen", []))
+    s.add(int(cid))
+    state["seen"] = sorted(s)
 
-
-# -----------------------------
-# TRACKED (TRACK MODE)
-# -----------------------------
 
 def tracked_ids(state: Dict[str, Any]) -> Set[int]:
-    return set(int(k) for k in (state.get("tracked") or {}).keys())
+    return set(state.get("tracked", []))
 
 
 def mark_tracked(state: Dict[str, Any], cid: int) -> None:
-    state.setdefault("tracked", {})
-    state["tracked"][str(int(cid))] = {"ts": time.time()}
+    s = set(state.get("tracked", []))
+    s.add(int(cid))
+    state["tracked"] = sorted(s)
 
 
-# -----------------------------
-# FIRST MOVE anti-dup + cooldown
-# -----------------------------
+# -------------------------
+# FIRST MOVE cooldown / sent
+# -------------------------
 
 def first_move_sent(state: Dict[str, Any], cid: int) -> bool:
-    return str(int(cid)) in (state.get("first_move") or {})
+    sent = state.get("first_move_sent", {})
+    return str(cid) in sent
 
 
 def mark_first_move_sent(state: Dict[str, Any], cid: int, ts: float) -> None:
-    state.setdefault("first_move", {})
-    state["first_move"][str(int(cid))] = {"ts": float(ts)}
+    sent = state.get("first_move_sent", {})
+    sent[str(cid)] = float(ts)
+    state["first_move_sent"] = sent
 
 
 def first_move_cooldown_ok(state: Dict[str, Any], cid: int, cooldown_sec: int) -> bool:
-    fm = (state.get("first_move") or {}).get(str(int(cid)))
-    if not fm:
-        return True
-    last_ts = float(fm.get("ts") or 0)
-    return (time.time() - last_ts) >= float(cooldown_sec)
+    sent = state.get("first_move_sent", {})
+    last_ts = float(sent.get(str(cid), 0.0) or 0.0)
+    return (time.time() - last_ts) >= cooldown_sec
 
 
-# -----------------------------
-# CONFIRM-LIGHT anti-dup + cooldown
-# -----------------------------
+# -------------------------
+# CONFIRM LIGHT cooldown / sent
+# -------------------------
 
 def confirm_light_sent(state: Dict[str, Any], cid: int) -> bool:
-    return str(int(cid)) in (state.get("confirm_light") or {})
+    sent = state.get("confirm_light_sent", {})
+    return str(cid) in sent
 
 
 def mark_confirm_light_sent(state: Dict[str, Any], cid: int, ts: float) -> None:
-    state.setdefault("confirm_light", {})
-    state["confirm_light"][str(int(cid))] = {"ts": float(ts)}
+    sent = state.get("confirm_light_sent", {})
+    sent[str(cid)] = float(ts)
+    state["confirm_light_sent"] = sent
 
 
 def confirm_light_cooldown_ok(state: Dict[str, Any], cid: int, cooldown_sec: int) -> bool:
-    cl = (state.get("confirm_light") or {}).get(str(int(cid)))
-    if not cl:
-        return True
-    last_ts = float(cl.get("ts") or 0)
-    return (time.time() - last_ts) >= float(cooldown_sec)
+    sent = state.get("confirm_light_sent", {})
+    last_ts = float(sent.get(str(cid), 0.0) or 0.0)
+    return (time.time() - last_ts) >= cooldown_sec
 
 
-# -----------------------------
-# STARTUP guard (anti-duplicate "bot started")
-# -----------------------------
+# -------------------------
+# STARTUP GUARD (anti-spam "bot started")
+# -------------------------
 
 def startup_sent_recent(state: Dict[str, Any], cooldown_sec: int = 3600) -> bool:
-    state.setdefault("startup", {})
-    rec = state["startup"].get("last")
-    if not rec:
-        return False
-    last_ts = float(rec.get("ts") or 0)
-    return (time.time() - last_ts) < float(cooldown_sec)
+    last_ts = float(state.get("startup_ts", 0.0) or 0.0)
+    return (time.time() - last_ts) < cooldown_sec
 
 
 def mark_startup_sent(state: Dict[str, Any]) -> None:
-    state.setdefault("startup", {})
-    state["startup"]["last"] = {"ts": time.time()}
+    state["startup_ts"] = float(time.time())
