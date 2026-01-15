@@ -1,5 +1,6 @@
 import asyncio
 import time
+import os
 from telegram.constants import ParseMode
 from telegram.ext import Application
 
@@ -34,6 +35,14 @@ from candles_bybit import (
     get_candles_15m as get_bybit_15m,
 )
 
+DEBUG = os.getenv("DEBUG", "0") == "1"
+
+
+def log(msg: str):
+    if DEBUG:
+        print(msg, flush=True)
+
+
 # ==================================================
 # ОСНОВНОЙ СКАН
 # ==================================================
@@ -44,8 +53,9 @@ async def scan_once(app, settings, cmc, sheets):
     tracked = tracked_ids(state)
 
     coins = cmc.fetch_recent_listings(limit=settings.limit)
+    log(f"[SCAN] fetched {len(coins)} coins from CMC")
+
     now_ts = time.time()
-print(f"[SCAN] fetched {len(coins)} coins from CMC")
 
     for coin in coins:
         cid = int(coin.get("id") or 0)
@@ -58,9 +68,11 @@ print(f"[SCAN] fetched {len(coins)} coins from CMC")
         price = float(usd.get("price") or 0)
         age = age_days(coin.get("date_added"))
 
+        symbol = coin.get("symbol")
+
         token = {
             "id": cid,
-            "symbol": coin.get("symbol"),
+            "symbol": symbol,
             "name": coin.get("name"),
             "slug": coin.get("slug"),
             "date_added": coin.get("date_added"),
@@ -89,9 +101,8 @@ print(f"[SCAN] fetched {len(coins)} coins from CMC")
         # ------------------------------
         # ULTRA-EARLY → TRACK MODE
         # ------------------------------
-        print(f"[ULTRA] {token['symbol']} age={age} vol={vol:,.0f}")
-
         if age is not None and age <= 1 and vol >= 500_000:
+            log(f"[ULTRA CHECK] {symbol} age={age} vol={vol:,.0f}")
             if cid not in seen:
                 await app.bot.send_message(
                     chat_id=settings.chat_id,
@@ -115,30 +126,32 @@ print(f"[SCAN] fetched {len(coins)} coins from CMC")
         if cid not in tracked:
             continue
 
-        binance_ok = check_binance(token["symbol"])
-        bybit_ok = check_bybit(token["symbol"])
+        binance_ok = check_binance(symbol)
+        bybit_ok = check_bybit(symbol)
 
         if not binance_ok and not bybit_ok:
             continue
 
         market = "Binance" if binance_ok else "Bybit"
+        log(f"[TRADING] {symbol} on {market}")
 
         # ------------------------------
         # FIRST MOVE (5m)
         # ------------------------------
         candles_5m = []
         if binance_ok:
-            candles_5m = get_binance_5m(token["symbol"])
-        elif bybit_ok:
-            candles_5m = get_bybit_5m(token["symbol"])
-            if binance_ok or bybit_ok:
-    print(f"[TRADING] {token['symbol']} on {'Binance' if binance_ok else 'Bybit'}")
-
+            candles_5m = get_binance_5m(symbol)
+        else:
+            candles_5m = get_bybit_5m(symbol)
 
         FIRST_COOLDOWN = 60 * 60  # 1 час
 
         if candles_5m:
-            fm = first_move_eval(token["symbol"], candles_5m, market)
+            log(f"[FIRST MOVE CHECK] {symbol} candles_5m={len(candles_5m)}")
+
+            fm = first_move_eval(symbol, candles_5m, market)
+            log(f"[FIRST MOVE RESULT] {symbol} ok={fm.get('ok')} reason={fm.get('reason')}")
+
             if (
                 fm.get("ok")
                 and not first_move_sent(state, cid)
@@ -160,14 +173,18 @@ print(f"[SCAN] fetched {len(coins)} coins from CMC")
 
         candles_15m = []
         if binance_ok:
-            candles_15m = get_binance_15m(token["symbol"])
-        elif bybit_ok:
-            candles_15m = get_bybit_15m(token["symbol"])
+            candles_15m = get_binance_15m(symbol)
+        else:
+            candles_15m = get_bybit_15m(symbol)
 
         CONFIRM_COOLDOWN = 2 * 60 * 60  # 2 часа
 
         if candles_15m:
-            cl = confirm_light_eval(token["symbol"], candles_15m, market)
+            log(f"[CONFIRM CHECK] {symbol} candles_15m={len(candles_15m)}")
+
+            cl = confirm_light_eval(symbol, candles_15m, market)
+            log(f"[CONFIRM RESULT] {symbol} ok={cl.get('ok')} reason={cl.get('reason')}")
+
             if (
                 cl.get("ok")
                 and not confirm_light_sent(state, cid)
@@ -182,6 +199,7 @@ print(f"[SCAN] fetched {len(coins)} coins from CMC")
 
     sheets.flush()
     save_state(state)
+
 
 # ==================================================
 # MAIN LOOP
@@ -206,7 +224,8 @@ async def main():
         text=(
             "📡 Listings Radar запущен\n"
             "Цепочка: ULTRA → TRACK → FIRST MOVE → CONFIRM-LIGHT\n"
-            "SUMMARY MODE: ENTRY + EXIT + VERDICT"
+            "SUMMARY: ENTRY + EXIT + VERDICT\n"
+            f"DEBUG: {'ON' if DEBUG else 'OFF'}"
         ),
         parse_mode=ParseMode.HTML,
     )
@@ -215,11 +234,15 @@ async def main():
         try:
             await scan_once(app, settings, cmc, sheets)
         except Exception as e:
+            # Ловим всё, чтобы бот не падал
             await app.bot.send_message(
                 chat_id=settings.chat_id,
                 text=f"❌ Ошибка: {e}",
             )
+            log(f"[ERROR] {e}")
         await asyncio.sleep(settings.check_interval_min * 60)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
+
