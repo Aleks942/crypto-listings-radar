@@ -45,6 +45,7 @@ async def scan_once(app, settings, cmc, sheets):
 
     coins = cmc.fetch_recent_listings(limit=settings.limit)
     now_ts = time.time()
+print(f"[SCAN] fetched {len(coins)} coins from CMC")
 
     for coin in coins:
         cid = int(coin.get("id") or 0)
