@@ -2,83 +2,94 @@ from typing import List, Dict, Any
 
 from score_engine import Candle, score_market
 from entry_window import build_entry_plan
-from exit_plan import build_exit_plan
-from verdict import decide_verdict
-from summary_mode import build_summary_message
 
 
-def first_move_eval(
-    symbol: str,
-    candles_raw: List[Dict[str, Any]],
-    market: str,
-) -> Dict[str, Any]:
+def first_move_eval(symbol: str, candles_raw: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     FIRST MOVE (5m)
-    SCORE → базовый импульс → ENTRY → EXIT → VERDICT → SUMMARY
+    - SCORE engine A/B/C
+    - ENTRY WINDOW: BREAKOUT / PULLBACK / WAIT
+    - Возвращает {"ok": True, "text": "..."} или {"ok": False, "reason": "..."}
     """
 
-    if not candles_raw or len(candles_raw) < 3:
-        return {"ok": False, "reason": "Недостаточно свечей"}
-
-    # SCORE candles (твоя структура o/h/l/c/v)
+    # --- нормализуем свечи в формат score_engine ---
     candles = [
-        Candle(o=c["o"], h=c["h"], l=c["l"], c=c["c"], v=c["v"])
+        Candle(
+            o=float(c.get("o", 0)),
+            h=float(c.get("h", 0)),
+            l=float(c.get("l", 0)),
+            c=float(c.get("c", 0)),
+            v=float(c.get("v", 0)),
+        )
         for c in candles_raw
+        if c is not None
     ]
 
+    if len(candles) < 20:
+        return {"ok": False, "reason": "Недостаточно свечей для FIRST MOVE (нужно ≥ 20)"}
+
+    # --- SCORE ---
     score = score_market(candles)
     if score.letter == "C":
         return {"ok": False, "reason": f"SCORE C — {score.reason}"}
 
-    # базовый фильтр импульса
+    # --- базовая проверка импульса (как у тебя было) ---
     last = candles[-1]
     prev = candles[-2]
 
-    impulse_ok = (last.h - last.l) >= 1.2 * (prev.h - prev.l)
-    close_strong = last.c > (last.l + 0.5 * (last.h - last.l))
+    last_range = max(last.h - last.l, 0.0)
+    prev_range = max(prev.h - prev.l, 0.0)
 
-    if not impulse_ok:
-        return {"ok": False, "reason": "Нет импульса"}
-    if not close_strong:
-        return {"ok": False, "reason": "Слабое закрытие"}
+    if prev_range <= 0 or last_range <= 0:
+        return {"ok": False, "reason": "Плохие свечи (range=0)"}
 
-    # адаптер под entry_window (open/high/low/close/volume)
-    candles_for_plan = [
-        {"open": c["o"], "high": c["h"], "low": c["l"], "close": c["c"], "volume": c["v"]}
-        for c in candles_raw
-    ]
+    impulse_ok = last_range >= 1.2 * prev_range
+    close_strong = last.c > (last.l + 0.5 * last_range)
 
-    plan = build_entry_plan(candles_for_plan, tf="5m")
-    exitp = build_exit_plan(entry=plan.entry, stop=plan.stop, score_grade=score.letter, tf="5m")
-    ver = decide_verdict(score_grade=score.letter, entry_mode=plan.mode, has_exit=(exitp.tp1 is not None))
+    if not (impulse_ok and close_strong):
+        return {"ok": False, "reason": "Нет импульса или слабое закрытие"}
 
-    if ver.action == "SKIP":
-        return {"ok": False, "reason": ver.reason}
+    # --- ENTRY WINDOW (на исходных словарях o/h/l/c/v) ---
+    plan = build_entry_plan(symbol, candles_raw, tf="5m")
 
-    score_details = [score.reason] if getattr(score, "reason", None) else []
-    risk_note = "EARLY / AGGRESSIVE. Новый листинг — высокая волатильность."
-    if score.letter == "A" and plan.mode == "PULLBACK":
-        risk_note = "A-grade + pullback. Вход более контролируемый, но риск обязателен."
+    if plan.mode == "WAIT" or plan.entry is None or plan.stop is None:
+        return {"ok": False, "reason": "WAIT — нет адекватного окна входа"}
 
-    text = build_summary_message(
-        token=symbol,
-        market=market,
-        stage="FIRST MOVE",
-        tf="5m",
-        score_grade=score.letter,
-        score_details=score_details,
-        entry_mode=plan.mode,
-        entry=plan.entry,
-        stop=plan.stop,
-        invalidation=plan.invalidation,
-        entry_notes=plan.notes,
-        tp1=exitp.tp1,
-        tp2=exitp.tp2,
-        trail_hint=exitp.trail_hint,
-        exit_notes=exitp.notes,
-        verdict_action=ver.action,
-        verdict_reason=ver.reason,
-        risk_note=risk_note,
+    # --- сообщение ---
+    notes_block = ""
+    if plan.notes:
+        # показываем только коротко, чтобы не спамить
+        short_notes = plan.notes[-3:] if len(plan.notes) > 3 else plan.notes
+        notes_block = "\n".join([f"• {n}" for n in short_notes])
+
+    tp_block = ""
+    if plan.tp1 is not None and plan.tp2 is not None:
+        tp_block = (
+            f"TP1: <b>{plan.tp1}</b> (+1R)\n"
+            f"TP2: <b>{plan.tp2}</b> (+2R)\n\n"
+            f"Exit:\n"
+            f"• TP1 → 50% фиксация\n"
+            f"• Стоп в BE\n"
+        )
+    else:
+        tp_block = "Exit:\n• TP1 +1R → 50%\n• Стоп в BE\n"
+
+    text = (
+        f"🟢 <b>FIRST MOVE</b> — ENTRY WINDOW\n\n"
+        f"<b>{symbol}</b>\n"
+        f"SCORE: {score.letter} ({score.points}/4)\n"
+        f"Режим: <b>{plan.mode}</b>\n\n"
+        f"Entry: <b>{plan.entry}</b>\n"
+        f"Stop: <b>{plan.stop}</b>\n"
+        f"Invalidation: <b>{plan.invalidation}</b>\n\n"
+        f"{tp_block}\n"
+        f"Причины:\n"
+        f"• {score.reason}\n"
+        + (f"{notes_block}\n\n" if notes_block else "\n")
+        + (
+            "Риск:\n"
+            "• 0.25% депо (SAFE)\n"
+        )
     )
 
     return {"ok": True, "score": score.letter, "text": text}
