@@ -101,3 +101,4 @@ def startup_sent_recent(state: Dict[str, Any], cooldown_sec: int = 3600) -> bool
 
 def mark_startup_sent(state: Dict[str, Any]) -> None:
     state["startup_ts"] = float(time.time())
+
