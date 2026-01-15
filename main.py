@@ -37,11 +37,8 @@ from candles_bybit import (
 )
 
 from liquidity import liquidity_gate
+from liq_debug import should_send_liq_debug, mark_liq_debug_sent, build_liq_debug_text
 
-
-# ==================================================
-# ОСНОВНОЙ СКАН
-# ==================================================
 
 async def scan_once(app, settings, cmc, sheets):
     state = load_state()
@@ -74,9 +71,6 @@ async def scan_once(app, settings, cmc, sheets):
             "ts": now_ts,
         }
 
-        # ------------------------------
-        # GOOGLE SHEETS (лог)
-        # ------------------------------
         sheets.buffer_append({
             "detected_at": now_iso_utc(),
             "cmc_id": cid,
@@ -90,9 +84,6 @@ async def scan_once(app, settings, cmc, sheets):
             "comment": "",
         })
 
-        # ------------------------------
-        # ULTRA-EARLY → TRACK MODE
-        # ------------------------------
         if age is not None and age <= settings.max_age_days and vol >= settings.min_volume_usd:
             if cid not in seen:
                 await app.bot.send_message(
@@ -111,9 +102,6 @@ async def scan_once(app, settings, cmc, sheets):
                 mark_seen(state, cid)
                 mark_tracked(state, cid)
 
-        # ------------------------------
-        # TRACK → ТОРГИ / СВЕЧИ
-        # ------------------------------
         if cid not in tracked:
             continue
 
@@ -126,13 +114,9 @@ async def scan_once(app, settings, cmc, sheets):
         elif bybit_ok:
             market = "BYBIT"
 
-        # если рынка нет — просто ждём
         if market == "NONE":
             continue
 
-        # ------------------------------
-        # СВЕЧИ 5m / 15m
-        # ------------------------------
         candles_5m = []
         candles_15m = []
 
@@ -143,20 +127,20 @@ async def scan_once(app, settings, cmc, sheets):
             candles_5m = get_bybit_5m(token["symbol"])
             candles_15m = get_bybit_15m(token["symbol"])
 
-        # ------------------------------
-        # ✅ LIQUIDITY GATE (Шаг 1)
-        # ------------------------------
         ok_liq, liq = liquidity_gate(token["symbol"], market, candles_5m, candles_15m)
         if not ok_liq:
-            # не спамим в телеграм — просто не торгуем, пока условия плохие
-            # (позже в DEBUG режиме будем показывать причину одной строкой)
+            if getattr(settings, "debug", False):
+                if should_send_liq_debug(state, cid, every_sec=3600):
+                    txt = build_liq_debug_text(token["symbol"], liq)
+                    await app.bot.send_message(
+                        chat_id=settings.chat_id,
+                        text=txt,
+                        parse_mode=ParseMode.HTML,
+                    )
+                    mark_liq_debug_sent(state, cid)
             continue
 
-        # ------------------------------
-        # FIRST MOVE (5m)
-        # ------------------------------
         FIRST_COOLDOWN = 60 * 60  # 1 час
-
         if candles_5m:
             fm = first_move_eval(token["symbol"], candles_5m)
             if (
@@ -171,11 +155,7 @@ async def scan_once(app, settings, cmc, sheets):
                 )
                 mark_first_move_sent(state, cid, time.time())
 
-        # ------------------------------
-        # CONFIRM-LIGHT (15m)
-        # ------------------------------
         CONFIRM_COOLDOWN = 2 * 60 * 60  # 2 часа
-
         if candles_15m:
             cl = confirm_light_eval(token["symbol"], candles_15m)
             if (
@@ -194,10 +174,6 @@ async def scan_once(app, settings, cmc, sheets):
     save_state(state)
 
 
-# ==================================================
-# MAIN LOOP
-# ==================================================
-
 async def main():
     settings = Settings.load()
 
@@ -212,7 +188,6 @@ async def main():
     await app.initialize()
     await app.start()
 
-    # --- Startup anti-duplicate (1 раз в час) ---
     state = load_state()
     if not startup_sent_recent(state, cooldown_sec=3600):
         await app.bot.send_message(
@@ -232,13 +207,9 @@ async def main():
         try:
             await scan_once(app, settings, cmc, sheets)
         except Exception as e:
-            await app.bot.send_message(
-                chat_id=settings.chat_id,
-                text=f"❌ Ошибка: {e}",
-            )
+            await app.bot.send_message(chat_id=settings.chat_id, text=f"❌ Ошибка: {e}")
         await asyncio.sleep(settings.check_interval_min * 60)
 
 
 if __name__ == "__main__":
     asyncio.run(main())
-
