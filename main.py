@@ -37,7 +37,7 @@ from candles_bybit import (
 )
 
 from liquidity import liquidity_gate
-from liq_debug import should_send_liq_debug, mark_liq_debug_sent, build_liq_debug_text
+from noise_filter import is_unverified_token, ALLOW_UNVERIFIED_TRACK
 
 
 async def scan_once(app, settings, cmc, sheets):
@@ -71,37 +71,90 @@ async def scan_once(app, settings, cmc, sheets):
             "ts": now_ts,
         }
 
-        sheets.buffer_append({
-            "detected_at": now_iso_utc(),
-            "cmc_id": cid,
-            "symbol": token["symbol"],
-            "name": token["name"],
-            "slug": token["slug"],
-            "age_days": age,
-            "market_cap_usd": mcap,
-            "volume24h_usd": vol,
-            "status": "NEW",
-            "comment": "",
-        })
+        # ------------------------------
+        # ULTRA-EARLY → TRACK MODE (с фильтром UNVERIFIED)
+        # ------------------------------
+        ultra_ok = (age is not None and age <= settings.max_age_days and vol >= settings.min_volume_usd)
 
-        if age is not None and age <= settings.max_age_days and vol >= settings.min_volume_usd:
+        if ultra_ok:
+            unverified, reason_uv = is_unverified_token({
+                "symbol": token["symbol"],
+                "name": token["name"],
+                "slug": token["slug"],
+                "market_cap": mcap,
+                "volume_24h": vol,
+            })
+
+            # Лог в Sheets: разные статусы
+            sheets.buffer_append({
+                "detected_at": now_iso_utc(),
+                "cmc_id": cid,
+                "symbol": token["symbol"],
+                "name": token["name"],
+                "slug": token["slug"],
+                "age_days": age,
+                "market_cap_usd": mcap,
+                "volume24h_usd": vol,
+                "status": "UNVERIFIED" if unverified else "NEW",
+                "comment": reason_uv if unverified else "",
+            })
+
+            # Антидубликат ULTRA по seen
             if cid not in seen:
-                await app.bot.send_message(
-                    chat_id=settings.chat_id,
-                    text=(
-                        "⚡ <b>ULTRA-EARLY</b>\n\n"
-                        f"<b>{token['name']}</b> ({token['symbol']})\n"
-                        f"Возраст: {age} дн\n"
-                        f"Market Cap: ${mcap:,.0f}\n"
-                        f"Volume 24h: ${vol:,.0f}\n\n"
-                        "👀 Добавлен в TRACK MODE\n"
-                        "⏳ Ждём появления торгов"
-                    ),
-                    parse_mode=ParseMode.HTML,
-                )
-                mark_seen(state, cid)
-                mark_tracked(state, cid)
+                if unverified:
+                    # UNVERIFIED — по умолчанию НЕ добавляем в TRACK MODE
+                    await app.bot.send_message(
+                        chat_id=settings.chat_id,
+                        text=(
+                            "🟡 <b>ULTRA-EARLY (UNVERIFIED)</b>\n\n"
+                            f"<b>{token['name']}</b> ({token['symbol']})\n"
+                            f"Возраст: {age} дн\n"
+                            f"Market Cap: ${mcap:,.0f}\n"
+                            f"Volume 24h: ${vol:,.0f}\n\n"
+                            f"Причина: {reason_uv}\n\n"
+                            + ("👀 Добавлен в TRACK MODE (ALLOW_UNVERIFIED_TRACK=1)\n" if ALLOW_UNVERIFIED_TRACK
+                               else "⛔ По умолчанию не трекаю. Если хочешь трекать — поставь ALLOW_UNVERIFIED_TRACK=1")
+                        ),
+                        parse_mode=ParseMode.HTML,
+                    )
+                    mark_seen(state, cid)
+                    if ALLOW_UNVERIFIED_TRACK:
+                        mark_tracked(state, cid)
+                else:
+                    await app.bot.send_message(
+                        chat_id=settings.chat_id,
+                        text=(
+                            "⚡ <b>ULTRA-EARLY</b>\n\n"
+                            f"<b>{token['name']}</b> ({token['symbol']})\n"
+                            f"Возраст: {age} дн\n"
+                            f"Market Cap: ${mcap:,.0f}\n"
+                            f"Volume 24h: ${vol:,.0f}\n\n"
+                            "👀 Добавлен в TRACK MODE\n"
+                            "⏳ Ждём появления торгов"
+                        ),
+                        parse_mode=ParseMode.HTML,
+                    )
+                    mark_seen(state, cid)
+                    mark_tracked(state, cid)
 
+        else:
+            # Если не ULTRA — всё равно логируем как “NEW” (по желанию можно отключить)
+            sheets.buffer_append({
+                "detected_at": now_iso_utc(),
+                "cmc_id": cid,
+                "symbol": token["symbol"],
+                "name": token["name"],
+                "slug": token["slug"],
+                "age_days": age,
+                "market_cap_usd": mcap,
+                "volume24h_usd": vol,
+                "status": "SKIP",
+                "comment": "",
+            })
+
+        # ------------------------------
+        # TRACK → ТОРГИ / СВЕЧИ
+        # ------------------------------
         if cid not in tracked:
             continue
 
@@ -127,20 +180,12 @@ async def scan_once(app, settings, cmc, sheets):
             candles_5m = get_bybit_5m(token["symbol"])
             candles_15m = get_bybit_15m(token["symbol"])
 
-        ok_liq, liq = liquidity_gate(token["symbol"], market, candles_5m, candles_15m)
+        ok_liq, _liq = liquidity_gate(token["symbol"], market, candles_5m, candles_15m)
         if not ok_liq:
-            if getattr(settings, "debug", False):
-                if should_send_liq_debug(state, cid, every_sec=3600):
-                    txt = build_liq_debug_text(token["symbol"], liq)
-                    await app.bot.send_message(
-                        chat_id=settings.chat_id,
-                        text=txt,
-                        parse_mode=ParseMode.HTML,
-                    )
-                    mark_liq_debug_sent(state, cid)
             continue
 
-        FIRST_COOLDOWN = 60 * 60  # 1 час
+        # FIRST MOVE (5m)
+        FIRST_COOLDOWN = 60 * 60
         if candles_5m:
             fm = first_move_eval(token["symbol"], candles_5m)
             if (
@@ -155,7 +200,8 @@ async def scan_once(app, settings, cmc, sheets):
                 )
                 mark_first_move_sent(state, cid, time.time())
 
-        CONFIRM_COOLDOWN = 2 * 60 * 60  # 2 часа
+        # CONFIRM-LIGHT (15m)
+        CONFIRM_COOLDOWN = 2 * 60 * 60
         if candles_15m:
             cl = confirm_light_eval(token["symbol"], candles_15m)
             if (
