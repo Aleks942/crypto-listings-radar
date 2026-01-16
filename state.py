@@ -121,5 +121,28 @@ def startup_sent_recent(state: Dict[str, Any], cooldown_sec: int = 3600) -> bool
 
 def mark_startup_sent(state: Dict[str, Any]) -> None:
     state["startup_ts"] = float(time.time())
+# -------------------------
+# WATCH (до появления торгов)
+# -------------------------
+
+from typing import Set
+
+def watch_ids(state: dict) -> Set[int]:
+    return set(state.get("watch", []))
+
+def mark_watch(state: dict, cid: int) -> None:
+    s = set(state.get("watch", []))
+    s.add(int(cid))
+    state["watch"] = sorted(s)
+
+def unwatch(state: dict, cid: int) -> None:
+    s = set(state.get("watch", []))
+    s.discard(int(cid))
+    state["watch"] = sorted(s)
+
+def mark_watch_meta(state: dict, cid: int, symbol: str, name: str):
+    meta = state.get("watch_meta", {}) or {}
+    meta[str(cid)] = {"ts": float(time.time()), "symbol": symbol, "name": name}
+    state["watch_meta"] = meta
 
 
