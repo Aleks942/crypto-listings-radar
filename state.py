@@ -258,4 +258,45 @@ def startup_sent_recent(state: Dict[str, Any], cooldown_sec: int = 3600) -> bool
 
 def mark_startup_sent(state: Dict[str, Any]) -> None:
     state["startup_ts"] = float(time.time())
+    SIGMaSKIBIDU, [16.01.2026 04:26]
+❌ Ошибка: [Errno 32] Broken pipe
+
+SIGMaSKIBIDU, [16.01.2026 11:12]
+⚡ ULTRA-EARLY
+
+RollX (ROLL)
+Возраст: 0 дн
+Market Cap: $13,143,434
+Volume 24h: $1,913,505
+
+👀 Добавлен в TRACK MODE
+⏳ Ждём появления торгов
+
+SIGMaSKIBIDU, [16.01.2026 11:22]
+⚡ ULTRA-EARLY
+
+Gas Town (GAS)
+Возраст: 0 дн
+Market Cap: $0
+Volume 24h: $26,233,022
+
+👀 Добавлен в TRACK MODE
+⏳ Ждём появления торгов
+
+SIGMaSKIBIDU, [16.01.2026 19:45]
+⚡ ULTRA-EARLY
+
+Wrapped Krown (WKROWN)
+Возраст: 0 дн
+Market Cap: $2,037,499
+Volume 24h: $507,201
+
+👀 Добавлен в TRACK MODE
+⏳ Ждём появления торгов
+
+SIGMaSKIBIDU, [16.01.2026 19:55]
+📡 Listings Radar запущен
+Цепочка: ULTRA → TRACK → FIRST MOVE → CONFIRM-LIGHT
+SUMMARY: ENTRY + EXIT + VERDICT
+DEBUG: OFF
 
