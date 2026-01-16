@@ -23,16 +23,24 @@ from state import (
     confirm_light_cooldown_ok,
     startup_sent_recent,
     mark_startup_sent,
+    track_status_sent,
+    mark_track_status_sent,
+    track_status_cooldown_ok,
 )
 
-from detect_trading import check_binance, check_bybit
+from detect_trading import (
+    check_binance,
+    check_bybit,
+    bybit_symbol_exists,
+    binance_symbol_exists,
+)
+
 from first_move import first_move_eval
 from confirm_light import confirm_light_eval
 
 from candles_binance import get_candles_5m as get_binance_5m
 from candles_bybit import get_candles_5m as get_bybit_5m
 
-# 15m опционально — если есть, включим CONFIRM-LIGHT.
 try:
     from candles_binance import get_candles_15m as get_binance_15m
 except Exception:
@@ -43,54 +51,42 @@ try:
 except Exception:
     get_bybit_15m = None
 
+from track_status import build_track_status_text
+
 
 # ==================================================
-# ENV knobs (безопасные дефолты)
+# ENV knobs
 # ==================================================
-TRACK_TTL_HOURS = int((os.getenv("TRACK_TTL_HOURS", "24") or "24").strip())
-ALLOW_UNVERIFIED_TRACK = (os.getenv("ALLOW_UNVERIFIED_TRACK", "0") or "0").strip() == "1"
-DEBUG = (os.getenv("DEBUG", "OFF") or "OFF").strip().upper() == "ON"
+TRACK_TTL_HOURS = int(os.getenv("TRACK_TTL_HOURS", "24").strip() or "24")
+ALLOW_UNVERIFIED_TRACK = os.getenv("ALLOW_UNVERIFIED_TRACK", "0").strip() == "1"
+DEBUG = os.getenv("DEBUG", "OFF").strip().upper() == "ON"
+
+# раз в сколько минут писать TRACK STATUS по одному токену (чтобы не спамить)
+TRACK_STATUS_COOLDOWN_MIN = int(os.getenv("TRACK_STATUS_COOLDOWN_MIN", "360").strip() or "360")  # 6 часов
 
 
 # ==================================================
 # helpers
 # ==================================================
 def is_unverified_token(symbol: str, name: str) -> str | None:
-    """
-    Возвращает причину (строку), если токен подозрительный.
-    Если всё норм — None.
-    """
     s = (symbol or "").strip()
     n = (name or "").strip()
     nl = n.lower()
 
-    # подозрительный символ: "_" часто у скам/временных тикеров
     if "_" in s:
         return "Подозрительный symbol (есть _)"
 
-    # домены/URL/подозрительные признаки
     url_marks = ["http://", "https://", "www.", ".com", ".io", ".net", ".org", ".xyz"]
     if any(m in nl for m in url_marks):
         return "В названии признаки URL/домена"
 
-    # точка в имени как Sport.Fun — часто доменное/брендовое, включаем в фильтр
     if "." in n:
         return "В названии/описании признаки домена/URL"
 
     return None
 
 
-async def safe_send(
-    app: Application,
-    chat_id: str,
-    text: str,
-    parse_mode=ParseMode.HTML,
-    retries: int = 3,
-):
-    """
-    Telegram иногда рвёт соединение (Broken pipe).
-    Делаем ретраи, чтобы бот не падал.
-    """
+async def safe_send(app: Application, chat_id: str, text: str, parse_mode=ParseMode.HTML, retries: int = 3):
     last_err = None
     for _ in range(retries):
         try:
@@ -98,14 +94,14 @@ async def safe_send(
         except (BrokenPipeError, ConnectionResetError, OSError) as e:
             last_err = e
             await asyncio.sleep(1.5)
+        except Exception as e:
+            # любые редкие ошибки Telegram — тоже ретраим
+            last_err = e
+            await asyncio.sleep(1.5)
     raise last_err
 
 
 def cleanup_tracked_ttl(state: dict) -> int:
-    """
-    Удаляет из tracked токены, которые слишком давно в TRACK и торгов так и не появилось.
-    TTL считаем по tracked_meta[cid]["ts"].
-    """
     ttl_sec = max(1, TRACK_TTL_HOURS) * 3600
     now = time.time()
 
@@ -113,21 +109,18 @@ def cleanup_tracked_ttl(state: dict) -> int:
     meta = state.get("tracked_meta", {}) or {}
 
     removed = 0
-    keep_tracked = []
-
+    keep = []
     for cid in tracked:
         key = str(cid)
         ts = float((meta.get(key) or {}).get("ts", 0.0) or 0.0)
-
-        # если meta нет — считаем “старым” и выкидываем
         if ts <= 0 or (now - ts) >= ttl_sec:
             removed += 1
             meta.pop(key, None)
         else:
-            keep_tracked.append(int(cid))
+            keep.append(int(cid))
 
     if removed > 0:
-        state["tracked"] = sorted(keep_tracked)
+        state["tracked"] = sorted(keep)
         state["tracked_meta"] = meta
 
     return removed
@@ -135,11 +128,7 @@ def cleanup_tracked_ttl(state: dict) -> int:
 
 def mark_tracked_meta(state: dict, cid: int, symbol: str, name: str):
     meta = state.get("tracked_meta", {}) or {}
-    meta[str(cid)] = {
-        "ts": float(time.time()),
-        "symbol": symbol,
-        "name": name,
-    }
+    meta[str(cid)] = {"ts": float(time.time()), "symbol": symbol, "name": name}
     state["tracked_meta"] = meta
 
 
@@ -149,14 +138,13 @@ def mark_tracked_meta(state: dict, cid: int, symbol: str, name: str):
 async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets: SheetsClient):
     state = load_state()
 
-    # TTL уборка, чтобы TRACK не раздувался
+    # уборка TTL
     cleanup_tracked_ttl(state)
 
     seen = seen_ids(state)
     tracked = tracked_ids(state)
 
     coins = cmc.fetch_recent_listings(limit=settings.limit)
-    now_ts = time.time()
 
     for coin in coins:
         cid = int(coin.get("id") or 0)
@@ -166,7 +154,6 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
         usd = (coin.get("quote") or {}).get("USD") or {}
         vol = float(usd.get("volume_24h") or 0)
         mcap = float(usd.get("market_cap") or 0)
-        price = float(usd.get("price") or 0)
         age = age_days(coin.get("date_added"))
 
         symbol = (coin.get("symbol") or "").strip()
@@ -174,7 +161,7 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
         slug = (coin.get("slug") or "").strip()
 
         # ------------------------------
-        # GOOGLE SHEETS (лог)
+        # Sheets log
         # ------------------------------
         sheets.buffer_append({
             "detected_at": now_iso_utc(),
@@ -190,11 +177,11 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
         })
 
         # ------------------------------
-        # ULTRA-EARLY → TRACK MODE
+        # ULTRA-EARLY -> TRACK
         # ------------------------------
         if age is not None and age <= settings.max_age_days and vol >= settings.min_volume_usd:
-            # проверка на "unverified"
             reason = is_unverified_token(symbol, name)
+
             if reason and not ALLOW_UNVERIFIED_TRACK:
                 if cid not in seen:
                     await safe_send(
@@ -215,7 +202,6 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
                     save_state(state)
                 continue
 
-            # норм ULTRA
             if cid not in seen:
                 await safe_send(
                     app,
@@ -234,30 +220,52 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
                 mark_seen(state, cid)
                 mark_tracked(state, cid)
                 mark_tracked_meta(state, cid, symbol, name)
-
-                # важно: сразу сохраняем, чтобы при рестарте не повторило ULTRA
                 save_state(state)
 
         # ------------------------------
-        # TRACK → ТОРГИ / СВЕЧИ
+        # TRACK -> trading / candles
         # ------------------------------
         if cid not in tracked:
             continue
 
-        # detect trading
-        binance_ok = check_binance(symbol)
-        bybit_ok = check_bybit(symbol)
+        # подробная проверка (для TRACK STATUS)
+        binance_ok = binance_symbol_exists(symbol)
+        bybit_spot_ok = bybit_symbol_exists("spot", symbol)
+        bybit_linear_ok = bybit_symbol_exists("linear", symbol)
 
-        if not (binance_ok or bybit_ok):
+        trading_any = binance_ok or bybit_spot_ok or bybit_linear_ok
+
+        # ---- TRACK STATUS (если торгов нет) ----
+        if not trading_any:
+            cooldown_sec = max(1, TRACK_STATUS_COOLDOWN_MIN) * 60
+            if track_status_cooldown_ok(state, cid, cooldown_sec):
+                text = build_track_status_text(
+                    name=name,
+                    symbol=symbol,
+                    age_days=age,
+                    mcap=mcap,
+                    vol=vol,
+                    binance_ok=binance_ok,
+                    bybit_spot_ok=bybit_spot_ok,
+                    bybit_linear_ok=bybit_linear_ok,
+                )
+                await safe_send(app, settings.chat_id, text, parse_mode=ParseMode.HTML)
+                mark_track_status_sent(state, cid, time.time())
+                save_state(state)
             continue
+
+        # совместимость (старые функции)
+        _ = check_binance(symbol)
+        _ = check_bybit(symbol)
 
         # ------------------------------
         # FIRST MOVE (5m)
         # ------------------------------
         candles_5m = []
+        # приоритет: Binance -> Bybit (с fallback внутри candles_bybit.py)
         if binance_ok:
             candles_5m = get_binance_5m(symbol)
-        elif bybit_ok:
+        else:
             candles_5m = get_bybit_5m(symbol)
 
         FIRST_COOLDOWN = 60 * 60  # 1 час
@@ -274,7 +282,7 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
                 save_state(state)
 
         # ------------------------------
-        # CONFIRM-LIGHT (15m) (если 15m функции доступны)
+        # CONFIRM-LIGHT (15m)
         # ------------------------------
         if get_binance_15m is None and get_bybit_15m is None:
             continue
@@ -282,7 +290,7 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
         candles_15m = []
         if binance_ok and get_binance_15m is not None:
             candles_15m = get_binance_15m(symbol)
-        elif bybit_ok and get_bybit_15m is not None:
+        elif get_bybit_15m is not None:
             candles_15m = get_bybit_15m(symbol)
 
         CONFIRM_COOLDOWN = 2 * 60 * 60  # 2 часа
@@ -303,7 +311,7 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
 
 
 # ==================================================
-# MAIN LOOP
+# main loop
 # ==================================================
 async def main():
     settings = Settings.load()
@@ -319,9 +327,7 @@ async def main():
     await app.initialize()
     await app.start()
 
-    # --------------------------------------------------
-    # STARTUP GUARD (железно): сначала сохраняем, потом шлём
-    # --------------------------------------------------
+    # STARTUP GUARD (фикс порядка: сначала сохраняем, потом шлём)
     state = load_state()
     if not startup_sent_recent(state, cooldown_sec=3600):
         mark_startup_sent(state)
@@ -339,12 +345,10 @@ async def main():
             parse_mode=ParseMode.HTML,
         )
 
-    # основной цикл
     while True:
         try:
             await scan_once(app, settings, cmc, sheets)
         except Exception as e:
-            # чтобы не падало из-за telegram/network
             try:
                 await safe_send(app, settings.chat_id, f"❌ Ошибка: {e}", parse_mode=None)
             except Exception:
