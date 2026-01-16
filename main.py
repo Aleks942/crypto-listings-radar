@@ -32,7 +32,7 @@ from confirm_light import confirm_light_eval
 from candles_binance import get_candles_5m as get_binance_5m
 from candles_bybit import get_candles_5m as get_bybit_5m
 
-# Если у тебя есть 15m функции — импортируем. Если нет, confirm_light просто не будет запускаться.
+# 15m опционально — если есть, включим CONFIRM-LIGHT.
 try:
     from candles_binance import get_candles_15m as get_binance_15m
 except Exception:
@@ -47,9 +47,9 @@ except Exception:
 # ==================================================
 # ENV knobs (безопасные дефолты)
 # ==================================================
-TRACK_TTL_HOURS = int(os.getenv("TRACK_TTL_HOURS", "24").strip() or "24")
-ALLOW_UNVERIFIED_TRACK = os.getenv("ALLOW_UNVERIFIED_TRACK", "0").strip() == "1"
-DEBUG = os.getenv("DEBUG", "OFF").strip().upper() == "ON"
+TRACK_TTL_HOURS = int((os.getenv("TRACK_TTL_HOURS", "24") or "24").strip())
+ALLOW_UNVERIFIED_TRACK = (os.getenv("ALLOW_UNVERIFIED_TRACK", "0") or "0").strip() == "1"
+DEBUG = (os.getenv("DEBUG", "OFF") or "OFF").strip().upper() == "ON"
 
 
 # ==================================================
@@ -64,7 +64,7 @@ def is_unverified_token(symbol: str, name: str) -> str | None:
     n = (name or "").strip()
     nl = n.lower()
 
-    # как у тебя в сообщениях:
+    # подозрительный символ: "_" часто у скам/временных тикеров
     if "_" in s:
         return "Подозрительный symbol (есть _)"
 
@@ -73,17 +73,23 @@ def is_unverified_token(symbol: str, name: str) -> str | None:
     if any(m in nl for m in url_marks):
         return "В названии признаки URL/домена"
 
-    # Sport.Fun — точка в имени тоже часто “маркер”
+    # точка в имени как Sport.Fun — часто доменное/брендовое, включаем в фильтр
     if "." in n:
         return "В названии/описании признаки домена/URL"
 
     return None
 
 
-async def safe_send(app: Application, chat_id: str, text: str, parse_mode=ParseMode.HTML, retries: int = 3):
+async def safe_send(
+    app: Application,
+    chat_id: str,
+    text: str,
+    parse_mode=ParseMode.HTML,
+    retries: int = 3,
+):
     """
     Telegram иногда рвёт соединение (Broken pipe).
-    Мы делаем ретраи, чтобы бот не падал.
+    Делаем ретраи, чтобы бот не падал.
     """
     last_err = None
     for _ in range(retries):
@@ -92,13 +98,12 @@ async def safe_send(app: Application, chat_id: str, text: str, parse_mode=ParseM
         except (BrokenPipeError, ConnectionResetError, OSError) as e:
             last_err = e
             await asyncio.sleep(1.5)
-    # если не получилось — пробрасываем, чтобы лог был честный
     raise last_err
 
 
 def cleanup_tracked_ttl(state: dict) -> int:
     """
-    Удаляет из tracked те токены, которые слишком давно в TRACK и торгов так и не появилось.
+    Удаляет из tracked токены, которые слишком давно в TRACK и торгов так и не появилось.
     TTL считаем по tracked_meta[cid]["ts"].
     """
     ttl_sec = max(1, TRACK_TTL_HOURS) * 3600
@@ -109,10 +114,12 @@ def cleanup_tracked_ttl(state: dict) -> int:
 
     removed = 0
     keep_tracked = []
+
     for cid in tracked:
         key = str(cid)
         ts = float((meta.get(key) or {}).get("ts", 0.0) or 0.0)
-        # если meta нет — считаем “старым” и выкидываем, чтобы не копилось
+
+        # если meta нет — считаем “старым” и выкидываем
         if ts <= 0 or (now - ts) >= ttl_sec:
             removed += 1
             meta.pop(key, None)
@@ -169,7 +176,6 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
         # ------------------------------
         # GOOGLE SHEETS (лог)
         # ------------------------------
-        # (оставляем как есть — полезно для аудита)
         sheets.buffer_append({
             "detected_at": now_iso_utc(),
             "cmc_id": cid,
@@ -206,6 +212,7 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
                         parse_mode=ParseMode.HTML,
                     )
                     mark_seen(state, cid)
+                    save_state(state)
                 continue
 
             # норм ULTRA
@@ -227,7 +234,8 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
                 mark_seen(state, cid)
                 mark_tracked(state, cid)
                 mark_tracked_meta(state, cid, symbol, name)
-                # важно: сразу сохраняем, чтобы при рестарте не повторило
+
+                # важно: сразу сохраняем, чтобы при рестарте не повторило ULTRA
                 save_state(state)
 
         # ------------------------------
@@ -266,7 +274,7 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
                 save_state(state)
 
         # ------------------------------
-        # CONFIRM-LIGHT (15m) (если есть свечи 15m)
+        # CONFIRM-LIGHT (15m) (если 15m функции доступны)
         # ------------------------------
         if get_binance_15m is None and get_bybit_15m is None:
             continue
@@ -311,9 +319,14 @@ async def main():
     await app.initialize()
     await app.start()
 
-    # startup guard (не спамить при рестартах/деплоях)
+    # --------------------------------------------------
+    # STARTUP GUARD (железно): сначала сохраняем, потом шлём
+    # --------------------------------------------------
     state = load_state()
     if not startup_sent_recent(state, cooldown_sec=3600):
+        mark_startup_sent(state)
+        save_state(state)
+
         await safe_send(
             app,
             settings.chat_id,
@@ -325,9 +338,8 @@ async def main():
             ),
             parse_mode=ParseMode.HTML,
         )
-        mark_startup_sent(state)
-        save_state(state)
 
+    # основной цикл
     while True:
         try:
             await scan_once(app, settings, cmc, sheets)
@@ -342,3 +354,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
