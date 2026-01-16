@@ -1,61 +1,91 @@
 import requests
 
-BINANCE = "https://api.binance.com"
-BYBIT = "https://api.bybit.com"
+
+BINANCE_EXCHANGE_INFO = "https://api.binance.com/api/v3/exchangeInfo"
+BYBIT_SPOT_SYMBOLS    = "https://api.bybit.com/v5/market/instruments-info?category=spot"
+BYBIT_LINEAR_SYMBOLS  = "https://api.bybit.com/v5/market/instruments-info?category=linear"
 
 
-def _pair(symbol: str) -> str:
-    s = (symbol or "").strip().upper()
-    return s if s.endswith("USDT") else f"{s}USDT"
-
-
-# -------------------------
-# BINANCE
-# -------------------------
-
-def binance_symbol_exists(symbol: str) -> bool:
-    """
-    Быстрая проверка: есть ли символ на Binance (обычно spot).
-    """
-    try:
-        sym = _pair(symbol)
-        url = f"{BINANCE}/api/v3/ticker/price"
-        r = requests.get(url, params={"symbol": sym}, timeout=8)
-        return r.status_code == 200
-    except Exception:
-        return False
+def _norm_symbol(sym: str) -> str:
+    return (sym or "").strip().upper()
 
 
 def check_binance(symbol: str) -> bool:
-    return binance_symbol_exists(symbol)
-
-
-# -------------------------
-# BYBIT (spot + linear/perp)
-# -------------------------
-
-def bybit_symbol_exists(category: str, symbol: str) -> bool:
     """
-    category: 'spot' | 'linear'
+    Проверка: есть ли символ на Binance SPOT (пара SYMBOLUSDT).
     """
+    s = _norm_symbol(symbol)
+    if not s:
+        return False
+
     try:
-        sym = _pair(symbol)
-        url = f"{BYBIT}/v5/market/tickers"
-        r = requests.get(url, params={"category": category, "symbol": sym}, timeout=8)
-        if r.status_code != 200:
-            return False
+        r = requests.get(BINANCE_EXCHANGE_INFO, timeout=10)
+        r.raise_for_status()
         data = r.json()
-        if str(data.get("retCode")) != "0":
-            return False
-        lst = (data.get("result") or {}).get("list") or []
-        return len(lst) > 0
+        target = f"{s}USDT"
+
+        for it in data.get("symbols", []):
+            if it.get("symbol") == target and it.get("status") == "TRADING":
+                return True
+        return False
     except Exception:
         return False
 
 
 def check_bybit(symbol: str) -> bool:
     """
-    True если есть либо spot, либо linear (perp).
+    Проверка: есть ли символ на Bybit SPOT (пара SYMBOLUSDT).
     """
-    return bybit_symbol_exists("spot", symbol) or bybit_symbol_exists("linear", symbol)
+    s = _norm_symbol(symbol)
+    if not s:
+        return False
+
+    try:
+        r = requests.get(BYBIT_SPOT_SYMBOLS, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+
+        target = f"{s}USDT"
+        items = ((data.get("result") or {}).get("list") or [])
+
+        for it in items:
+            if (it.get("symbol") or "").upper() == target:
+                st = (it.get("status") or "").upper()
+                # Bybit иногда возвращает "Trading" / "TRADING" / "ONLINE"
+                if st in ("TRADING", "ONLINE", "TRADABLE", "1", ""):
+                    return True
+                # если status непонятный — всё равно считаем, что инструмент существует
+                return True
+
+        return False
+    except Exception:
+        return False
+
+
+def check_bybit_linear(symbol: str) -> bool:
+    """
+    Проверка: есть ли символ на Bybit PERP (linear), обычно это SYMBOLUSDT.
+    """
+    s = _norm_symbol(symbol)
+    if not s:
+        return False
+
+    try:
+        r = requests.get(BYBIT_LINEAR_SYMBOLS, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+
+        target = f"{s}USDT"
+        items = ((data.get("result") or {}).get("list") or [])
+
+        for it in items:
+            if (it.get("symbol") or "").upper() == target:
+                st = (it.get("status") or "").upper()
+                if st in ("TRADING", "ONLINE", "TRADABLE", "1", ""):
+                    return True
+                return True
+
+        return False
+    except Exception:
+        return False
 
