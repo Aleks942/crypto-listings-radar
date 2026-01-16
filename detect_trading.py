@@ -1,37 +1,48 @@
 import requests
 
-BINANCE_INFO = "https://api.binance.com/api/v3/exchangeInfo"
-BYBIT_INFO = "https://api.bybit.com/v5/market/instruments-info?category=spot"
+BASE = "https://api.bybit.com"
 
 
-def _safe_get(url: str):
-    try:
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
-        return r.json()
-    except Exception:
-        return None
+def _pair(symbol: str) -> str:
+    s = (symbol or "").strip().upper()
+    return s if s.endswith("USDT") else f"{s}USDT"
 
 
 def check_binance(symbol: str) -> bool:
-    data = _safe_get(BINANCE_INFO)
-    if not data:
+    # оставь как было у тебя (если binance уже работает)
+    # если хочешь — я дам и binance-версию тоже, но сейчас не трогаем.
+    try:
+        sym = _pair(symbol)
+        url = "https://api.binance.com/api/v3/ticker/price"
+        r = requests.get(url, params={"symbol": sym}, timeout=8)
+        return r.status_code == 200
+    except Exception:
         return False
 
-    target = f"{symbol.upper()}USDT"
-    for s in data.get("symbols", []):
-        if s.get("symbol") == target and s.get("status") == "TRADING":
-            return True
-    return False
+
+def _bybit_ticker_exists(category: str, symbol: str) -> bool:
+    sym = _pair(symbol)
+    url = f"{BASE}/v5/market/tickers"
+    params = {"category": category, "symbol": sym}
+    r = requests.get(url, params=params, timeout=8)
+    if r.status_code != 200:
+        return False
+    data = r.json()
+    if str(data.get("retCode")) != "0":
+        return False
+    result = data.get("result") or {}
+    lst = result.get("list") or []
+    return len(lst) > 0
 
 
 def check_bybit(symbol: str) -> bool:
-    data = _safe_get(BYBIT_INFO)
-    if not data:
+    # spot OR linear (perp)
+    try:
+        if _bybit_ticker_exists("spot", symbol):
+            return True
+        if _bybit_ticker_exists("linear", symbol):
+            return True
+        return False
+    except Exception:
         return False
 
-    target = f"{symbol.upper()}USDT"
-    for s in (data.get("result", {}).get("list") or []):
-        if s.get("symbol") == target and s.get("status") == "Trading":
-            return True
-    return False
