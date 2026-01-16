@@ -1,63 +1,82 @@
-import os
-import time
 import requests
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
-BYBIT_BASE = "https://api.bybit.com"
-BYBIT_KLINES = f"{BYBIT_BASE}/v5/market/kline"
-
-DEFAULT_LIMIT_5M = int(os.getenv("BYBIT_LIMIT_5M", "120"))
-DEFAULT_LIMIT_15M = int(os.getenv("BYBIT_LIMIT_15M", "120"))
-
-HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "10"))
+BASE = "https://api.bybit.com"
 
 
-def _sym(symbol: str) -> str:
-    # Bybit spot/perp часто: SYMBOLUSDT
+def _pair(symbol: str) -> str:
     s = (symbol or "").strip().upper()
-    if s.endswith("USDT"):
-        return s
-    return f"{s}USDT"
+    return s if s.endswith("USDT") else f"{s}USDT"
 
 
-def _fetch_klines(symbol: str, interval_min: int, limit: int) -> List[Dict[str, Any]]:
+def _fetch_kline(category: str, symbol: str, interval: str, limit: int = 200) -> List[Dict[str, Any]]:
+    """
+    Bybit v5 klines:
+    /v5/market/kline?category=spot|linear&symbol=FOGOUSDT&interval=5&limit=200
+    result.list: [ [start, open, high, low, close, volume, turnover], ... ]
+    """
+    sym = _pair(symbol)
+
+    url = f"{BASE}/v5/market/kline"
     params = {
-        "category": "spot",
-        "symbol": _sym(symbol),
-        "interval": str(interval_min),  # minutes as string: "5", "15"
-        "limit": int(limit),
+        "category": category,
+        "symbol": sym,
+        "interval": str(interval),  # "5", "15", ...
+        "limit": str(limit),
     }
-    r = requests.get(BYBIT_KLINES, params=params, timeout=HTTP_TIMEOUT)
+
+    r = requests.get(url, params=params, timeout=10)
     r.raise_for_status()
-    js = r.json()
+    data = r.json()
 
-    # v5 response: {"retCode":0,"result":{"list":[[ts,open,high,low,close,volume,turnover],...]}}
-    result = (js.get("result") or {})
+    if str(data.get("retCode")) != "0":
+        return []
+
+    result = data.get("result") or {}
     rows = result.get("list") or []
+    if not rows:
+        return []
 
-    out = []
+    # В Bybit list обычно в обратном порядке (последние первые) — разворачиваем к старым->новым
+    rows = list(reversed(rows))
+
+    out: List[Dict[str, Any]] = []
     for row in rows:
         # row: [startTime, open, high, low, close, volume, turnover]
-        ts_ms = int(row[0])
+        try:
+            ts = int(row[0])
+            o = float(row[1])
+            h = float(row[2])
+            l = float(row[3])
+            c = float(row[4])
+            v = float(row[5])
+        except Exception:
+            continue
+
+        # Делаем “двойной формат” ключей — чтобы не ломалось ни в score_engine, ни в entry_window
         out.append({
-            "open": float(row[1]),
-            "high": float(row[2]),
-            "low": float(row[3]),
-            "close": float(row[4]),
-            "volume": float(row[5]),
-            "ts": ts_ms / 1000.0,
+            "t": ts,
+            "o": o, "h": h, "l": l, "c": c, "v": v,
+            "open": o, "high": h, "low": l, "close": c, "volume": v,
         })
 
-    # Bybit часто отдаёт от новых к старым — приводим к старые->новые
-    out.sort(key=lambda x: x["ts"])
     return out
 
 
-def get_candles_5m(symbol: str, limit: int = DEFAULT_LIMIT_5M) -> List[Dict[str, Any]]:
-    return _fetch_klines(symbol, 5, limit)
+def _get_candles_with_fallback(symbol: str, interval: str, limit: int = 200) -> List[Dict[str, Any]]:
+    # 1) пробуем spot
+    spot = _fetch_kline("spot", symbol, interval, limit=limit)
+    if spot:
+        return spot
+
+    # 2) fallback на linear (perp)
+    linear = _fetch_kline("linear", symbol, interval, limit=limit)
+    return linear
 
 
-def get_candles_15m(symbol: str, limit: int = DEFAULT_LIMIT_15M) -> List[Dict[str, Any]]:
-    return _fetch_klines(symbol, 15, limit)
+def get_candles_5m(symbol: str, limit: int = 200) -> List[Dict[str, Any]]:
+    return _get_candles_with_fallback(symbol, interval="5", limit=limit)
 
 
+def get_candles_15m(symbol: str, limit: int = 200) -> List[Dict[str, Any]]:
+    return _get_candles_with_fallback(symbol, interval="15", limit=limit)
