@@ -3,60 +3,51 @@ import time
 import requests
 from typing import List, Dict, Any
 
+BINANCE_BASE = "https://api.binance.com"
+BINANCE_SPOT_EXCHANGE_INFO = f"{BINANCE_BASE}/api/v3/exchangeInfo"
+BINANCE_KLINES = f"{BINANCE_BASE}/api/v3/klines"
 
-BINANCE_BASE = os.getenv("BINANCE_BASE", "https://api.binance.com")
+# сколько свечей брать
+DEFAULT_LIMIT_5M = int(os.getenv("BINANCE_LIMIT_5M", "120"))
+DEFAULT_LIMIT_15M = int(os.getenv("BINANCE_LIMIT_15M", "120"))
+
+# таймауты
+HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "10"))
 
 
 def _sym(symbol: str) -> str:
-    """
-    Приводим к стандарту Binance: TOKENUSDT.
-    Если уже содержит USDT — оставляем.
-    """
-    s = symbol.upper().strip()
+    # Binance spot: SYMBOLUSDT
+    s = (symbol or "").strip().upper()
     if s.endswith("USDT"):
         return s
-    return s + "USDT"
+    return f"{s}USDT"
 
 
-def _fetch_klines(symbol: str, interval: str, limit: int = 200) -> List[List[Any]]:
-    url = f"{BINANCE_BASE}/api/v3/klines"
-    params = {
-        "symbol": _sym(symbol),
-        "interval": interval,
-        "limit": int(limit),
-    }
-    try:
-        r = requests.get(url, params=params, timeout=12)
-        r.raise_for_status()
-        return r.json() or []
-    except Exception:
-        return []
+def _fetch_klines(symbol: str, interval: str, limit: int) -> List[Dict[str, Any]]:
+    params = {"symbol": _sym(symbol), "interval": interval, "limit": int(limit)}
+    r = requests.get(BINANCE_KLINES, params=params, timeout=HTTP_TIMEOUT)
+    r.raise_for_status()
+    data = r.json()
 
-
-def _normalize_klines(klines: List[List[Any]]) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    for k in klines:
+    out = []
+    for k in data:
         # kline format:
-        # 0 open_time, 1 open, 2 high, 3 low, 4 close, 5 volume, ...
-        try:
-            out.append({
-                "o": float(k[1]),
-                "h": float(k[2]),
-                "l": float(k[3]),
-                "c": float(k[4]),
-                "v": float(k[5]),
-            })
-        except Exception:
-            continue
+        # 0 openTime, 1 open, 2 high, 3 low, 4 close, 5 volume, ...
+        out.append({
+            "open": float(k[1]),
+            "high": float(k[2]),
+            "low": float(k[3]),
+            "close": float(k[4]),
+            "volume": float(k[5]),
+            "ts": int(k[0]) / 1000.0,
+        })
     return out
 
 
-def get_candles_5m(symbol: str, limit: int = 200) -> List[Dict[str, Any]]:
-    kl = _fetch_klines(symbol, interval="5m", limit=limit)
-    return _normalize_klines(kl)
+def get_candles_5m(symbol: str, limit: int = DEFAULT_LIMIT_5M) -> List[Dict[str, Any]]:
+    return _fetch_klines(symbol, "5m", limit)
 
 
-def get_candles_15m(symbol: str, limit: int = 200) -> List[Dict[str, Any]]:
-    kl = _fetch_klines(symbol, interval="15m", limit=limit)
-    return _normalize_klines(kl)
+def get_candles_15m(symbol: str, limit: int = DEFAULT_LIMIT_15M) -> List[Dict[str, Any]]:
+    return _fetch_klines(symbol, "15m", limit)
 
