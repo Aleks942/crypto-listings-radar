@@ -1,76 +1,63 @@
 import os
+import time
 import requests
 from typing import List, Dict, Any
 
+BYBIT_BASE = "https://api.bybit.com"
+BYBIT_KLINES = f"{BYBIT_BASE}/v5/market/kline"
 
-BYBIT_BASE = os.getenv("BYBIT_BASE", "https://api.bybit.com")
+DEFAULT_LIMIT_5M = int(os.getenv("BYBIT_LIMIT_5M", "120"))
+DEFAULT_LIMIT_15M = int(os.getenv("BYBIT_LIMIT_15M", "120"))
+
+HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "10"))
 
 
 def _sym(symbol: str) -> str:
-    """
-    Приводим к стандарту Bybit (spot/linear чаще TOKENUSDT).
-    """
-    s = symbol.upper().strip()
+    # Bybit spot/perp часто: SYMBOLUSDT
+    s = (symbol or "").strip().upper()
     if s.endswith("USDT"):
         return s
-    return s + "USDT"
+    return f"{s}USDT"
 
 
-def _fetch_kline_v5(symbol: str, interval: str, limit: int = 200) -> List[List[Any]]:
-    """
-    Bybit v5 market/kline
-    interval: "5" или "15"
-    """
-    url = f"{BYBIT_BASE}/v5/market/kline"
+def _fetch_klines(symbol: str, interval_min: int, limit: int) -> List[Dict[str, Any]]:
     params = {
-        "category": "linear",      # чаще всего новые токены появляются в linear/perp
+        "category": "spot",
         "symbol": _sym(symbol),
-        "interval": interval,
+        "interval": str(interval_min),  # minutes as string: "5", "15"
         "limit": int(limit),
     }
-    try:
-        r = requests.get(url, params=params, timeout=12)
-        r.raise_for_status()
-        data = r.json() or {}
-        result = (data.get("result") or {})
-        lst = result.get("list") or []
-        return lst
-    except Exception:
-        return []
+    r = requests.get(BYBIT_KLINES, params=params, timeout=HTTP_TIMEOUT)
+    r.raise_for_status()
+    js = r.json()
 
+    # v5 response: {"retCode":0,"result":{"list":[[ts,open,high,low,close,volume,turnover],...]}}
+    result = (js.get("result") or {})
+    rows = result.get("list") or []
 
-def _normalize_bybit_list(lst: List[List[Any]]) -> List[Dict[str, Any]]:
-    """
-    Bybit v5 list format:
-    [startTime, open, high, low, close, volume, turnover]
-    Обычно приходит в обратном порядке (новые -> старые), развернём.
-    """
-    out: List[Dict[str, Any]] = []
-    try:
-        lst = list(reversed(lst))
-    except Exception:
-        pass
+    out = []
+    for row in rows:
+        # row: [startTime, open, high, low, close, volume, turnover]
+        ts_ms = int(row[0])
+        out.append({
+            "open": float(row[1]),
+            "high": float(row[2]),
+            "low": float(row[3]),
+            "close": float(row[4]),
+            "volume": float(row[5]),
+            "ts": ts_ms / 1000.0,
+        })
 
-    for k in lst:
-        try:
-            out.append({
-                "o": float(k[1]),
-                "h": float(k[2]),
-                "l": float(k[3]),
-                "c": float(k[4]),
-                "v": float(k[5]),
-            })
-        except Exception:
-            continue
+    # Bybit часто отдаёт от новых к старым — приводим к старые->новые
+    out.sort(key=lambda x: x["ts"])
     return out
 
 
-def get_candles_5m(symbol: str, limit: int = 200) -> List[Dict[str, Any]]:
-    lst = _fetch_kline_v5(symbol, interval="5", limit=limit)
-    return _normalize_bybit_list(lst)
+def get_candles_5m(symbol: str, limit: int = DEFAULT_LIMIT_5M) -> List[Dict[str, Any]]:
+    return _fetch_klines(symbol, 5, limit)
 
 
-def get_candles_15m(symbol: str, limit: int = 200) -> List[Dict[str, Any]]:
-    lst = _fetch_kline_v5(symbol, interval="15", limit=limit)
-    return _normalize_bybit_list(lst)
+def get_candles_15m(symbol: str, limit: int = DEFAULT_LIMIT_15M) -> List[Dict[str, Any]]:
+    return _fetch_klines(symbol, 15, limit)
+
 
