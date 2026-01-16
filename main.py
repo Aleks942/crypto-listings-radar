@@ -26,15 +26,13 @@ from state import (
     track_status_sent,
     mark_track_status_sent,
     track_status_cooldown_ok,
+    watch_ids,
+    mark_watch,
+    unwatch,
+    mark_watch_meta,
 )
 
-from detect_trading import (
-    check_binance,
-    check_bybit,
-    bybit_symbol_exists,
-    binance_symbol_exists,
-)
-
+from detect_trading import check_binance, check_bybit, check_bybit_linear
 from first_move import first_move_eval
 from confirm_light import confirm_light_eval
 
@@ -51,23 +49,14 @@ try:
 except Exception:
     get_bybit_15m = None
 
-from track_status import build_track_status_text
+
+TRACK_TTL_HOURS = int((os.getenv("TRACK_TTL_HOURS", "24") or "24").strip() or "24")
+ALLOW_UNVERIFIED_TRACK = (os.getenv("ALLOW_UNVERIFIED_TRACK", "0").strip() == "1")
+DEBUG = (os.getenv("DEBUG", "OFF").strip().upper() == "ON")
+
+TRACK_STATUS_COOLDOWN_SEC = int((os.getenv("TRACK_STATUS_COOLDOWN_MIN", "120") or "120").strip() or "120") * 60
 
 
-# ==================================================
-# ENV knobs
-# ==================================================
-TRACK_TTL_HOURS = int(os.getenv("TRACK_TTL_HOURS", "24").strip() or "24")
-ALLOW_UNVERIFIED_TRACK = os.getenv("ALLOW_UNVERIFIED_TRACK", "0").strip() == "1"
-DEBUG = os.getenv("DEBUG", "OFF").strip().upper() == "ON"
-
-# раз в сколько минут писать TRACK STATUS по одному токену (чтобы не спамить)
-TRACK_STATUS_COOLDOWN_MIN = int(os.getenv("TRACK_STATUS_COOLDOWN_MIN", "360").strip() or "360")  # 6 часов
-
-
-# ==================================================
-# helpers
-# ==================================================
 def is_unverified_token(symbol: str, name: str) -> str | None:
     s = (symbol or "").strip()
     n = (name or "").strip()
@@ -94,55 +83,50 @@ async def safe_send(app: Application, chat_id: str, text: str, parse_mode=ParseM
         except (BrokenPipeError, ConnectionResetError, OSError) as e:
             last_err = e
             await asyncio.sleep(1.5)
-        except Exception as e:
-            # любые редкие ошибки Telegram — тоже ретраим
-            last_err = e
-            await asyncio.sleep(1.5)
     raise last_err
 
 
-def cleanup_tracked_ttl(state: dict) -> int:
-    ttl_sec = max(1, TRACK_TTL_HOURS) * 3600
-    now = time.time()
-
-    tracked = set(state.get("tracked", []))
-    meta = state.get("tracked_meta", {}) or {}
-
-    removed = 0
-    keep = []
-    for cid in tracked:
-        key = str(cid)
-        ts = float((meta.get(key) or {}).get("ts", 0.0) or 0.0)
-        if ts <= 0 or (now - ts) >= ttl_sec:
-            removed += 1
-            meta.pop(key, None)
-        else:
-            keep.append(int(cid))
-
-    if removed > 0:
-        state["tracked"] = sorted(keep)
-        state["tracked_meta"] = meta
-
-    return removed
+def _has_candles(candles: list | None) -> bool:
+    return bool(candles) and len(candles) >= 20
 
 
-def mark_tracked_meta(state: dict, cid: int, symbol: str, name: str):
-    meta = state.get("tracked_meta", {}) or {}
-    meta[str(cid)] = {"ts": float(time.time()), "symbol": symbol, "name": name}
-    state["tracked_meta"] = meta
+def build_track_status_text(symbol: str, name: str, binance_ok: bool, bybit_spot_ok: bool, bybit_perp_ok: bool) -> str:
+    lines = []
+    lines.append("🛰 <b>TRACK STATUS</b>")
+    lines.append("")
+    lines.append(f"<b>{name}</b> ({symbol})")
+    lines.append("")
+    lines.append("Проверка торгов:")
+    lines.append(f"• Binance: {'✅' if binance_ok else '❌'}")
+    lines.append(f"• Bybit spot: {'✅' if bybit_spot_ok else '❌'}")
+    lines.append(f"• Bybit perp (linear): {'✅' if bybit_perp_ok else '❌'}")
+    lines.append("")
+    if not (binance_ok or bybit_spot_ok or bybit_perp_ok):
+        lines.append("Где сейчас: пока нигде (на Binance/Bybit)")
+        lines.append("")
+        lines.append("Почему тишина:")
+        lines.append("• Торги ещё не появились на Binance/Bybit. Чаще всего токен пока торгуется на DEX или на другой CEX.")
+    else:
+        where = []
+        if binance_ok:
+            where.append("Binance")
+        if bybit_spot_ok:
+            where.append("Bybit spot")
+        if bybit_perp_ok:
+            where.append("Bybit perp (linear)")
+        lines.append(f"Где сейчас: {', '.join(where)}")
+        lines.append("")
+        lines.append("Дальше:")
+        lines.append("• Включаю сбор свечей → FIRST MOVE (5m) → CONFIRM (15m)")
+    return "\n".join(lines)
 
 
-# ==================================================
-# scan
-# ==================================================
 async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets: SheetsClient):
     state = load_state()
 
-    # уборка TTL
-    cleanup_tracked_ttl(state)
-
     seen = seen_ids(state)
     tracked = tracked_ids(state)
+    watch = watch_ids(state)
 
     coins = cmc.fetch_recent_listings(limit=settings.limit)
 
@@ -160,9 +144,6 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
         name = (coin.get("name") or "").strip()
         slug = (coin.get("slug") or "").strip()
 
-        # ------------------------------
-        # Sheets log
-        # ------------------------------
         sheets.buffer_append({
             "detected_at": now_iso_utc(),
             "cmc_id": cid,
@@ -176,17 +157,16 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
             "comment": "",
         })
 
-        # ------------------------------
-        # ULTRA-EARLY -> TRACK
-        # ------------------------------
-        if age is not None and age <= settings.max_age_days and vol >= settings.min_volume_usd:
-            reason = is_unverified_token(symbol, name)
+        if age is None:
+            continue
 
+        # ULTRA фильтр
+        if age <= settings.max_age_days and vol >= settings.min_volume_usd:
+            reason = is_unverified_token(symbol, name)
             if reason and not ALLOW_UNVERIFIED_TRACK:
                 if cid not in seen:
                     await safe_send(
-                        app,
-                        settings.chat_id,
+                        app, settings.chat_id,
                         (
                             "🟡 <b>ULTRA-EARLY (UNVERIFIED)</b>\n\n"
                             f"<b>{name}</b> ({symbol})\n"
@@ -202,143 +182,130 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
                     save_state(state)
                 continue
 
+            # ULTRA сообщение — один раз
             if cid not in seen:
                 await safe_send(
-                    app,
-                    settings.chat_id,
+                    app, settings.chat_id,
                     (
                         "⚡ <b>ULTRA-EARLY</b>\n\n"
                         f"<b>{name}</b> ({symbol})\n"
                         f"Возраст: {age} дн\n"
                         f"Market Cap: ${mcap:,.0f}\n"
                         f"Volume 24h: ${vol:,.0f}\n\n"
-                        "👀 Добавлен в TRACK MODE\n"
-                        "⏳ Ждём появления торгов"
+                        "👀 Добавлен в WATCH MODE\n"
+                        "⏳ Ждём появления торгов на Binance/Bybit"
                     ),
                     parse_mode=ParseMode.HTML,
                 )
                 mark_seen(state, cid)
-                mark_tracked(state, cid)
-                mark_tracked_meta(state, cid, symbol, name)
+                mark_watch(state, cid)
+                mark_watch_meta(state, cid, symbol, name)
                 save_state(state)
 
-        # ------------------------------
-        # TRACK -> trading / candles
-        # ------------------------------
+        # WATCH → проверка торгов
+        if cid in watch and cid not in tracked:
+            binance_ok = check_binance(symbol)
+            bybit_spot_ok = check_bybit(symbol)
+            bybit_perp_ok = check_bybit_linear(symbol)
+
+            # если торгов всё ещё нет — просто пропускаем
+            if not (binance_ok or bybit_spot_ok or bybit_perp_ok):
+                continue
+
+            # появились торги → переводим в TRACK
+            await safe_send(
+                app, settings.chat_id,
+                (
+                    "✅ <b>TRADING FOUND</b>\n\n"
+                    f"<b>{name}</b> ({symbol})\n\n"
+                    "Перевожу в TRACK MODE и начинаю анализ свечей."
+                ),
+                parse_mode=ParseMode.HTML,
+            )
+            unwatch(state, cid)
+            mark_tracked(state, cid)
+            save_state(state)
+
+        # TRACK → статус + свечи + сигналы
         if cid not in tracked:
             continue
 
-        # подробная проверка (для TRACK STATUS)
-        binance_ok = binance_symbol_exists(symbol)
-        bybit_spot_ok = bybit_symbol_exists("spot", symbol)
-        bybit_linear_ok = bybit_symbol_exists("linear", symbol)
+        binance_ok = check_binance(symbol)
+        bybit_spot_ok = check_bybit(symbol)
+        bybit_perp_ok = check_bybit_linear(symbol)
 
-        trading_any = binance_ok or bybit_spot_ok or bybit_linear_ok
+        # TRACK STATUS (редко)
+        if (not track_status_sent(state, cid)) or track_status_cooldown_ok(state, cid, TRACK_STATUS_COOLDOWN_SEC):
+            await safe_send(
+                app, settings.chat_id,
+                build_track_status_text(symbol, name, binance_ok, bybit_spot_ok, bybit_perp_ok),
+                parse_mode=ParseMode.HTML,
+            )
+            mark_track_status_sent(state, cid, time.time())
+            save_state(state)
 
-        # ---- TRACK STATUS (если торгов нет) ----
-        if not trading_any:
-            cooldown_sec = max(1, TRACK_STATUS_COOLDOWN_MIN) * 60
-            if track_status_cooldown_ok(state, cid, cooldown_sec):
-                text = build_track_status_text(
-                    name=name,
-                    symbol=symbol,
-                    age_days=age,
-                    mcap=mcap,
-                    vol=vol,
-                    binance_ok=binance_ok,
-                    bybit_spot_ok=bybit_spot_ok,
-                    bybit_linear_ok=bybit_linear_ok,
-                )
-                await safe_send(app, settings.chat_id, text, parse_mode=ParseMode.HTML)
-                mark_track_status_sent(state, cid, time.time())
-                save_state(state)
-            continue
-
-        # совместимость (старые функции)
-        _ = check_binance(symbol)
-        _ = check_bybit(symbol)
-
-        # ------------------------------
-        # FIRST MOVE (5m)
-        # ------------------------------
+        # свечи 5m: приоритет Binance → Bybit spot → Bybit perp
         candles_5m = []
-        # приоритет: Binance -> Bybit (с fallback внутри candles_bybit.py)
         if binance_ok:
             candles_5m = get_binance_5m(symbol)
-        else:
+        elif bybit_spot_ok:
+            candles_5m = get_bybit_5m(symbol)
+        elif bybit_perp_ok:
             candles_5m = get_bybit_5m(symbol)
 
-        FIRST_COOLDOWN = 60 * 60  # 1 час
+        FIRST_COOLDOWN = 60 * 60
 
         if candles_5m:
             fm = first_move_eval(symbol, candles_5m)
-            if (
-                fm.get("ok")
-                and not first_move_sent(state, cid)
-                and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN)
-            ):
+            if fm.get("ok") and not first_move_sent(state, cid) and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN):
                 await safe_send(app, settings.chat_id, fm["text"], parse_mode=ParseMode.HTML)
                 mark_first_move_sent(state, cid, time.time())
                 save_state(state)
 
-        # ------------------------------
-        # CONFIRM-LIGHT (15m)
-        # ------------------------------
+        # 15m
         if get_binance_15m is None and get_bybit_15m is None:
             continue
 
         candles_15m = []
         if binance_ok and get_binance_15m is not None:
             candles_15m = get_binance_15m(symbol)
-        elif get_bybit_15m is not None:
+        elif (bybit_spot_ok or bybit_perp_ok) and get_bybit_15m is not None:
             candles_15m = get_bybit_15m(symbol)
 
-        CONFIRM_COOLDOWN = 2 * 60 * 60  # 2 часа
+        if not candles_15m:
+            continue
 
-        if candles_15m:
-            cl = confirm_light_eval(symbol, candles_15m)
-            if (
-                cl.get("ok")
-                and not confirm_light_sent(state, cid)
-                and confirm_light_cooldown_ok(state, cid, CONFIRM_COOLDOWN)
-            ):
-                await safe_send(app, settings.chat_id, cl["text"], parse_mode=ParseMode.HTML)
-                mark_confirm_light_sent(state, cid, time.time())
-                save_state(state)
+        CONFIRM_COOLDOWN = 2 * 60 * 60
+        cl = confirm_light_eval(symbol, candles_15m)
+        if cl.get("ok") and not confirm_light_sent(state, cid) and confirm_light_cooldown_ok(state, cid, CONFIRM_COOLDOWN):
+            await safe_send(app, settings.chat_id, cl["text"], parse_mode=ParseMode.HTML)
+            mark_confirm_light_sent(state, cid, time.time())
+            save_state(state)
 
     sheets.flush()
     save_state(state)
 
 
-# ==================================================
-# main loop
-# ==================================================
 async def main():
     settings = Settings.load()
 
     app = Application.builder().token(settings.bot_token).build()
     cmc = CMCClient(settings.cmc_api_key)
-    sheets = SheetsClient(
-        settings.google_sheet_url,
-        settings.google_service_account_json,
-        settings.sheet_tab_name,
-    )
+    sheets = SheetsClient(settings.google_sheet_url, settings.google_service_account_json, settings.sheet_tab_name)
 
     await app.initialize()
     await app.start()
 
-    # STARTUP GUARD (фикс порядка: сначала сохраняем, потом шлём)
     state = load_state()
     if not startup_sent_recent(state, cooldown_sec=3600):
         mark_startup_sent(state)
         save_state(state)
-
         await safe_send(
             app,
             settings.chat_id,
             (
                 "📡 Listings Radar запущен\n"
-                "Цепочка: ULTRA → TRACK → FIRST MOVE → CONFIRM-LIGHT\n"
+                "Цепочка: ULTRA → WATCH → (TRADING FOUND) → TRACK → FIRST MOVE → CONFIRM-LIGHT\n"
                 "SUMMARY: ENTRY + EXIT + VERDICT\n"
                 f"DEBUG: {'ON' if DEBUG else 'OFF'}"
             ),
