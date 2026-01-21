@@ -8,6 +8,8 @@ from config import Settings
 from cmc import CMCClient, age_days
 from sheets import SheetsClient, now_iso_utc
 
+from confirm_entry_client import send_to_confirm_entry  # ✅ ВАЖНО: ДОБАВИТЬ
+
 from state import (
     load_state,
     save_state,
@@ -31,6 +33,7 @@ from confirm_light import confirm_light_eval
 
 from candles_binance import get_candles_5m as get_binance_5m
 from candles_bybit import get_candles_5m as get_bybit_5m
+
 
 # 15m опционально
 try:
