@@ -8,7 +8,7 @@ from config import Settings
 from cmc import CMCClient, age_days
 from sheets import SheetsClient, now_iso_utc
 
-from confirm_entry_client import send_to_confirm_entry  # 🔑 финальный мозг
+from confirm_entry_client import send_to_confirm_entry
 
 from state import (
     load_state,
@@ -34,7 +34,6 @@ from confirm_light import confirm_light_eval
 from candles_binance import get_candles_5m as get_binance_5m
 from candles_bybit import get_candles_5m as get_bybit_5m
 
-# 15m опционально
 try:
     from candles_binance import get_candles_15m as get_binance_15m
 except Exception:
@@ -47,20 +46,16 @@ except Exception:
 
 
 # ==================================================
-# ENV knobs
+# ENV
 # ==================================================
-WATCH_TTL_HOURS = int((os.getenv("WATCH_TTL_HOURS", "24") or "24").strip())
-TRACK_TTL_HOURS = int((os.getenv("TRACK_TTL_HOURS", "72") or "72").strip())
-ALLOW_UNVERIFIED_TRACK = (os.getenv("ALLOW_UNVERIFIED_TRACK", "0") or "0").strip() == "1"
-DEBUG = (os.getenv("DEBUG", "OFF") or "OFF").strip().upper() == "ON"
+WATCH_TTL_HOURS = int(os.getenv("WATCH_TTL_HOURS", "24"))
+TRACK_TTL_HOURS = int(os.getenv("TRACK_TTL_HOURS", "72"))
 
-FIRST_COOLDOWN = int((os.getenv("FIRST_COOLDOWN_SEC", str(60 * 60)) or str(60 * 60)).strip())
-CONFIRM_COOLDOWN = int((os.getenv("CONFIRM_COOLDOWN_SEC", str(2 * 60 * 60)) or str(2 * 60 * 60)).strip())
-STARTUP_GUARD_SEC = int((os.getenv("STARTUP_GUARD_SEC", "3600") or "3600").strip())
+FIRST_COOLDOWN = int(os.getenv("FIRST_COOLDOWN_SEC", str(60 * 60)))
+CONFIRM_COOLDOWN = int(os.getenv("CONFIRM_COOLDOWN_SEC", str(2 * 60 * 60)))
+STARTUP_GUARD_SEC = int(os.getenv("STARTUP_GUARD_SEC", "3600"))
 
 
-# ==================================================
-# helpers
 # ==================================================
 def _now() -> float:
     return float(time.time())
@@ -78,8 +73,6 @@ async def safe_send(app: Application, chat_id: str, text: str, parse_mode=ParseM
 
 
 # ==================================================
-# Trading detector
-# ==================================================
 def detect_trading(symbol: str) -> dict:
     binance_ok = check_binance(symbol)
     bybit_spot_ok = check_bybit(symbol)
@@ -93,11 +86,8 @@ def detect_trading(symbol: str) -> dict:
 
 
 # ==================================================
-# scan
-# ==================================================
 async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets: SheetsClient):
     state = load_state()
-
     seen = seen_ids(state)
     tracked = tracked_ids(state)
 
@@ -130,41 +120,45 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
         if age is None or age > settings.max_age_days or vol < settings.min_volume_usd:
             continue
 
+        # ---------- ULTRA ----------
         if cid not in seen:
             await safe_send(
                 app,
                 settings.chat_id,
                 f"⚡ <b>ULTRA-EARLY</b>\n\n<b>{name}</b> ({symbol})",
-                parse_mode=ParseMode.HTML,
             )
             mark_seen(state, cid)
             save_state(state)
 
-        if cid in tracked:
-            continue
+        already_tracked = cid in tracked
 
-        t = detect_trading(symbol)
-        if not t["any"]:
-            continue
+        # ---------- TRADING DETECT ----------
+        if not already_tracked:
+            t = detect_trading(symbol)
+            if not t["any"]:
+                continue
 
-        mark_tracked(state, cid)
-        save_state(state)
+            mark_tracked(state, cid)
+            save_state(state)
+        else:
+            t = detect_trading(symbol)
 
         # ---------- FIRST MOVE ----------
-        candles_5m = []
-        if t["binance"]:
-            candles_5m = get_binance_5m(symbol)
-        elif t["bybit_spot"] or t["bybit_linear"]:
-            candles_5m = get_bybit_5m(symbol)
+        if not confirm_light_sent(state, cid):
+            candles_5m = []
+            if t["binance"]:
+                candles_5m = get_binance_5m(symbol)
+            elif t["bybit_spot"] or t["bybit_linear"]:
+                candles_5m = get_bybit_5m(symbol)
 
-        if candles_5m:
-            fm = first_move_eval(symbol, candles_5m)
-            if fm.get("ok") and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN):
-                await safe_send(app, settings.chat_id, fm["text"], parse_mode=ParseMode.HTML)
-                mark_first_move_sent(state, cid, _now())
-                save_state(state)
+            if candles_5m:
+                fm = first_move_eval(symbol, candles_5m)
+                if fm.get("ok") and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN):
+                    await safe_send(app, settings.chat_id, fm["text"])
+                    mark_first_move_sent(state, cid, _now())
+                    save_state(state)
 
-        # ---------- CONFIRM LIGHT → CONFIRM ENTRY ----------
+        # ---------- CONFIRM LIGHT ----------
         candles_15m = []
         if t["binance"] and get_binance_15m:
             candles_15m = get_binance_15m(symbol)
@@ -175,6 +169,11 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
             cl = confirm_light_eval(symbol, candles_15m)
             if cl.get("ok") and confirm_light_cooldown_ok(state, cid, CONFIRM_COOLDOWN):
                 exchange = "BINANCE" if t["binance"] else "BYBIT"
+
+                # 🔒 анти-дубль при крэше
+                mark_confirm_light_sent(state, cid, _now())
+                save_state(state)
+
                 send_to_confirm_entry(
                     symbol=symbol,
                     exchange=exchange,
@@ -182,15 +181,11 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
                     candles=candles_15m,
                     mode_hint="CONFIRM_LIGHT",
                 )
-                mark_confirm_light_sent(state, cid, _now())
-                save_state(state)
 
     sheets.flush()
     save_state(state)
 
 
-# ==================================================
-# MAIN LOOP
 # ==================================================
 async def main():
     settings = Settings.load()
@@ -211,8 +206,7 @@ async def main():
         await safe_send(
             app,
             settings.chat_id,
-            "📡 Listings Radar запущен\nЦепочка: ULTRA → TRACK → FIRST MOVE → CONFIRM-ENTRY",
-            parse_mode=ParseMode.HTML,
+            "📡 Listings Radar запущен\nULTRA → TRACK → FIRST MOVE → CONFIRM-LIGHT",
         )
         mark_startup_sent(state)
         save_state(state)
