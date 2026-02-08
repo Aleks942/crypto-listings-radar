@@ -17,9 +17,8 @@ from state import (
     mark_seen,
     tracked_ids,
     mark_tracked,
-    first_move_sent,
-    mark_first_move_sent,
     first_move_cooldown_ok,
+    mark_first_move_sent,
     confirm_light_sent,
     mark_confirm_light_sent,
     confirm_light_cooldown_ok,
@@ -45,18 +44,14 @@ except Exception:
     get_bybit_15m = None
 
 
-# ==================================================
+# =======================
 # ENV
-# ==================================================
-WATCH_TTL_HOURS = int(os.getenv("WATCH_TTL_HOURS", "24"))
-TRACK_TTL_HOURS = int(os.getenv("TRACK_TTL_HOURS", "72"))
-
+# =======================
 FIRST_COOLDOWN = int(os.getenv("FIRST_COOLDOWN_SEC", str(60 * 60)))
 CONFIRM_COOLDOWN = int(os.getenv("CONFIRM_COOLDOWN_SEC", str(2 * 60 * 60)))
 STARTUP_GUARD_SEC = int(os.getenv("STARTUP_GUARD_SEC", "3600"))
 
 
-# ==================================================
 def _now() -> float:
     return float(time.time())
 
@@ -72,7 +67,6 @@ async def safe_send(app: Application, chat_id: str, text: str, parse_mode=ParseM
     raise last_err
 
 
-# ==================================================
 def detect_trading(symbol: str) -> dict:
     binance_ok = check_binance(symbol)
     bybit_spot_ok = check_bybit(symbol)
@@ -81,11 +75,13 @@ def detect_trading(symbol: str) -> dict:
         "binance": binance_ok,
         "bybit_spot": bybit_spot_ok,
         "bybit_linear": bybit_linear_ok,
-        "any": (binance_ok or bybit_spot_ok or bybit_linear_ok),
+        "any": binance_ok or bybit_spot_ok or bybit_linear_ok,
     }
 
 
-# ==================================================
+# =======================
+# SCAN LOOP
+# =======================
 async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets: SheetsClient):
     state = load_state()
     seen = seen_ids(state)
@@ -103,22 +99,11 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
         mcap = float(usd.get("market_cap") or 0)
         age = age_days(coin.get("date_added"))
 
-        symbol = (coin.get("symbol") or "").strip()
-        name = (coin.get("name") or "").strip()
-
-        sheets.buffer_append({
-            "detected_at": now_iso_utc(),
-            "cmc_id": cid,
-            "symbol": symbol,
-            "name": name,
-            "age_days": age,
-            "market_cap_usd": mcap,
-            "volume24h_usd": vol,
-            "status": "SCAN",
-        })
-
         if age is None or age > settings.max_age_days or vol < settings.min_volume_usd:
             continue
+
+        symbol = (coin.get("symbol") or "").strip()
+        name = (coin.get("name") or "").strip()
 
         # ---------- ULTRA ----------
         if cid not in seen:
@@ -127,12 +112,24 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
                 settings.chat_id,
                 f"⚡ <b>ULTRA-EARLY</b>\n\n<b>{name}</b> ({symbol})",
             )
+
+            sheets.buffer_append({
+                "detected_at": now_iso_utc(),
+                "cmc_id": cid,
+                "symbol": symbol,
+                "name": name,
+                "age_days": age,
+                "market_cap_usd": mcap,
+                "volume24h_usd": vol,
+                "status": "ULTRA",
+            })
+
             mark_seen(state, cid)
             save_state(state)
 
         already_tracked = cid in tracked
 
-        # ---------- TRADING DETECT ----------
+        # ---------- TRADING FOUND / TRACK ----------
         if not already_tracked:
             t = detect_trading(symbol)
             if not t["any"]:
@@ -140,6 +137,13 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
 
             mark_tracked(state, cid)
             save_state(state)
+
+            sheets.buffer_append({
+                "detected_at": now_iso_utc(),
+                "cmc_id": cid,
+                "symbol": symbol,
+                "status": "TRACK",
+            })
         else:
             t = detect_trading(symbol)
 
@@ -155,6 +159,14 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
                 fm = first_move_eval(symbol, candles_5m)
                 if fm.get("ok") and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN):
                     await safe_send(app, settings.chat_id, fm["text"])
+
+                    sheets.buffer_append({
+                        "detected_at": now_iso_utc(),
+                        "cmc_id": cid,
+                        "symbol": symbol,
+                        "status": "FIRST_MOVE",
+                    })
+
                     mark_first_move_sent(state, cid, _now())
                     save_state(state)
 
@@ -170,9 +182,16 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
             if cl.get("ok") and confirm_light_cooldown_ok(state, cid, CONFIRM_COOLDOWN):
                 exchange = "BINANCE" if t["binance"] else "BYBIT"
 
-                # 🔒 анти-дубль при крэше
+                # анти-дубль
                 mark_confirm_light_sent(state, cid, _now())
                 save_state(state)
+
+                sheets.buffer_append({
+                    "detected_at": now_iso_utc(),
+                    "cmc_id": cid,
+                    "symbol": symbol,
+                    "status": "CONFIRM_LIGHT",
+                })
 
                 send_to_confirm_entry(
                     symbol=symbol,
@@ -186,7 +205,9 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
     save_state(state)
 
 
-# ==================================================
+# =======================
+# MAIN
+# =======================
 async def main():
     settings = Settings.load()
 
@@ -206,7 +227,7 @@ async def main():
         await safe_send(
             app,
             settings.chat_id,
-            "📡 Listings Radar запущен\nULTRA → TRACK → FIRST MOVE → CONFIRM-LIGHT",
+            "📡 Listings Radar запущен\nULTRA → TRACK → FIRST MOVE → CONFIRM_LIGHT",
         )
         mark_startup_sent(state)
         save_state(state)
@@ -219,8 +240,10 @@ async def main():
                 await safe_send(app, settings.chat_id, f"❌ Ошибка: {e}", parse_mode=None)
             except Exception:
                 pass
+
         await asyncio.sleep(settings.check_interval_min * 60)
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+
