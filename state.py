@@ -77,7 +77,6 @@ def _find_row_by_key(ws, key: str) -> Optional[int]:
     """
     Возвращает номер строки (1-based) для данного key, либо None.
     """
-    # читаем колонку A целиком (может быть чуть тяжелее, но надёжно)
     col = ws.col_values(1)  # A
     for idx, v in enumerate(col, start=1):
         if (v or "").strip() == key:
@@ -93,7 +92,6 @@ def _sheets_load_state() -> Dict[str, Any]:
     if not r:
         return {}
 
-    # json лежит в колонке B
     raw = ws.cell(r, 2).value or ""
     raw = raw.strip()
     if not raw:
@@ -102,7 +100,6 @@ def _sheets_load_state() -> Dict[str, Any]:
     try:
         return json.loads(raw)
     except Exception:
-        # если кто-то случайно руками испортил JSON — не падаем, просто сбрасываем
         return {}
 
 
@@ -114,7 +111,6 @@ def _sheets_save_state(state: Dict[str, Any]) -> None:
     payload = json.dumps(state, ensure_ascii=False)
 
     if not r:
-        # добавляем новую строку
         ws.append_row([STATE_SHEET_KEY, payload], value_input_option="RAW")
     else:
         ws.update_cell(r, 2, payload)
@@ -155,7 +151,6 @@ def save_state(state: Dict[str, Any]) -> None:
     """
     Единственная точка входа: main.py делает from state import save_state
     """
-    # добавим timestamp чтобы понимать, что state реально обновляется
     state["__ts"] = float(time.time())
     if _sheets_enabled():
         return _sheets_save_state(state)
@@ -199,6 +194,20 @@ def unmark_watch(state: Dict[str, Any], cid: int) -> None:
     s = set(state.get("watch", []))
     s.discard(int(cid))
     state["watch"] = sorted(s)
+
+
+# =========================
+# ULTRA HARD ANTIDUPLICATE (PRO)
+# =========================
+def ultra_seen(state: Dict[str, Any], cid: int) -> bool:
+    lock = state.get("ultra_lock", {}) or {}
+    return str(int(cid)) in lock
+
+
+def mark_ultra_seen(state: Dict[str, Any], cid: int) -> None:
+    lock = state.get("ultra_lock", {}) or {}
+    lock[str(int(cid))] = float(time.time())
+    state["ultra_lock"] = lock
 
 
 # -------------------------
@@ -251,4 +260,3 @@ def startup_sent_recent(state: Dict[str, Any], cooldown_sec: int = 3600) -> bool
 
 def mark_startup_sent(state: Dict[str, Any]) -> None:
     state["startup_ts"] = float(time.time())
-
