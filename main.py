@@ -24,8 +24,8 @@ from state import (
     confirm_light_cooldown_ok,
     startup_sent_recent,
     mark_startup_sent,
-    ultra_seen,          # 🔥 NEW
-    mark_ultra_seen,     # 🔥 NEW
+    ultra_seen,          # ✅ ULTRA hard anti-duplicate
+    mark_ultra_seen,     # ✅ ULTRA hard anti-duplicate
 )
 
 from detect_trading import check_binance, check_bybit, check_bybit_linear
@@ -46,9 +46,17 @@ except Exception:
     get_bybit_15m = None
 
 
+# =======================
+# ENV
+# =======================
 FIRST_COOLDOWN = int(os.getenv("FIRST_COOLDOWN_SEC", str(60 * 60)))
 CONFIRM_COOLDOWN = int(os.getenv("CONFIRM_COOLDOWN_SEC", str(2 * 60 * 60)))
 STARTUP_GUARD_SEC = int(os.getenv("STARTUP_GUARD_SEC", "3600"))
+
+# Anti-scam knobs (можно менять env при желании)
+ANTI_SCAM_MIN_CANDLES = int(os.getenv("ANTI_SCAM_MIN_CANDLES", "25"))
+ANTI_SCAM_MAX_RANGE = float(os.getenv("ANTI_SCAM_MAX_RANGE", "2.5"))   # 2.5 = 250%
+ANTI_SCAM_VOL_DROP_K = float(os.getenv("ANTI_SCAM_VOL_DROP_K", "0.7")) # v2 must be >= v1*0.7
 
 
 def _now() -> float:
@@ -79,6 +87,48 @@ def detect_trading(symbol: str) -> dict:
 
 
 # =======================
+# Anti-scam filter (5m)
+# =======================
+def anti_scam_filter(candles: list) -> bool:
+    """
+    True  -> можно считать монету "живой" для FIRST_MOVE
+    False -> мусор/тонко/дикий памп/мало истории
+    Ожидаемый формат свечи: [ts, open, high, low, close, volume, ...]
+    """
+
+    if not candles or len(candles) < ANTI_SCAM_MIN_CANDLES:
+        return False
+
+    try:
+        highs = [float(c[2]) for c in candles]
+        lows = [float(c[3]) for c in candles]
+        volumes = [float(c[5]) for c in candles]
+    except Exception:
+        return False
+
+    low_min = min(lows) if lows else 0.0
+    high_max = max(highs) if highs else 0.0
+
+    if low_min <= 0:
+        return False
+
+    # Диапазон слишком дикий -> часто мем/скам/тонкая манипуляция
+    price_range = (high_max - low_min) / max(low_min, 1e-12)
+    if price_range > ANTI_SCAM_MAX_RANGE:
+        return False
+
+    # Проверка "объём не умирает": во второй половине не должно быть резкого провала
+    half = len(volumes) // 2
+    v1 = sum(volumes[:half]) if half > 0 else sum(volumes)
+    v2 = sum(volumes[half:]) if half > 0 else sum(volumes)
+
+    if v1 > 0 and v2 < v1 * ANTI_SCAM_VOL_DROP_K:
+        return False
+
+    return True
+
+
+# =======================
 # SCAN LOOP
 # =======================
 async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets: SheetsClient):
@@ -98,6 +148,7 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
         mcap = float(usd.get("market_cap") or 0)
         age = age_days(coin.get("date_added"))
 
+        # фильтр интересующих монет
         if age is None or age > settings.max_age_days or vol < settings.min_volume_usd:
             continue
 
@@ -106,13 +157,13 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
 
         # ---------- ULTRA (HARD LOCK) ----------
         if cid not in seen and not ultra_seen(state, cid):
-
             await safe_send(
                 app,
                 settings.chat_id,
                 f"⚡ <b>ULTRA-EARLY</b>\n\n<b>{name}</b> ({symbol})",
             )
 
+            # пишем ТОЛЬКО событие
             sheets.buffer_append({
                 "detected_at": now_iso_utc(),
                 "cmc_id": cid,
@@ -125,7 +176,7 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
             })
 
             mark_seen(state, cid)
-            mark_ultra_seen(state, cid)  # 🔥 HARD LOCK
+            mark_ultra_seen(state, cid)  # ✅ вечный антидубль ULTRA
             save_state(state)
 
         already_tracked = cid in tracked
@@ -146,9 +197,11 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
                 "status": "TRACK",
             })
         else:
+            # если уже tracked — всё равно можем проверить где торгуется сейчас
             t = detect_trading(symbol)
 
         # ---------- FIRST MOVE ----------
+        # логика сохранена: если CONFIRM_LIGHT уже был, FIRST_MOVE больше не нужен
         if not confirm_light_sent(state, cid):
             candles_5m = []
 
@@ -157,7 +210,8 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
             elif t["bybit_spot"] or t["bybit_linear"]:
                 candles_5m = get_bybit_5m(symbol)
 
-            if candles_5m:
+            # ✅ новый фильтр мусора: только если свечи "живые"
+            if candles_5m and anti_scam_filter(candles_5m):
                 fm = first_move_eval(symbol, candles_5m)
 
                 if fm.get("ok") and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN):
@@ -187,6 +241,7 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
             if cl.get("ok") and confirm_light_cooldown_ok(state, cid, CONFIRM_COOLDOWN):
                 exchange = "BINANCE" if t["binance"] else "BYBIT"
 
+                # анти-дубль confirm_light
                 mark_confirm_light_sent(state, cid, _now())
                 save_state(state)
 
