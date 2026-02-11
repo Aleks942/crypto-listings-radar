@@ -56,17 +56,23 @@ def _now() -> float:
     return float(time.time())
 
 
+# =======================
+# SAFE SEND
+# =======================
 async def safe_send(app: Application, chat_id: str, text: str, parse_mode=ParseMode.HTML, retries: int = 3):
     last_err = None
     for _ in range(retries):
         try:
             return await app.bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
-        except (BrokenPipeError, ConnectionResetError, OSError) as e:
+        except Exception as e:
             last_err = e
             await asyncio.sleep(1.5)
-    raise last_err
+    print(f"Telegram send failed: {last_err}")
 
 
+# =======================
+# TRADING DETECTOR
+# =======================
 def detect_trading(symbol: str) -> dict:
     binance_ok = check_binance(symbol)
     bybit_spot_ok = check_bybit(symbol)
@@ -77,6 +83,16 @@ def detect_trading(symbol: str) -> dict:
         "bybit_linear": bybit_linear_ok,
         "any": binance_ok or bybit_spot_ok or bybit_linear_ok,
     }
+
+
+# =======================
+# SAFE SHEETS WRITE
+# =======================
+def safe_sheet_append(sheets, data):
+    try:
+        sheets.buffer_append(data)
+    except Exception as e:
+        print(f"Sheets append skipped: {e}")
 
 
 # =======================
@@ -113,7 +129,7 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
                 f"⚡ <b>ULTRA-EARLY</b>\n\n<b>{name}</b> ({symbol})",
             )
 
-            sheets.buffer_append({
+            safe_sheet_append(sheets, {
                 "detected_at": now_iso_utc(),
                 "cmc_id": cid,
                 "symbol": symbol,
@@ -129,7 +145,7 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
 
         already_tracked = cid in tracked
 
-        # ---------- TRADING FOUND / TRACK ----------
+        # ---------- TRACK ----------
         if not already_tracked:
             t = detect_trading(symbol)
             if not t["any"]:
@@ -138,7 +154,7 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
             mark_tracked(state, cid)
             save_state(state)
 
-            sheets.buffer_append({
+            safe_sheet_append(sheets, {
                 "detected_at": now_iso_utc(),
                 "cmc_id": cid,
                 "symbol": symbol,
@@ -160,7 +176,7 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
                 if fm.get("ok") and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN):
                     await safe_send(app, settings.chat_id, fm["text"])
 
-                    sheets.buffer_append({
+                    safe_sheet_append(sheets, {
                         "detected_at": now_iso_utc(),
                         "cmc_id": cid,
                         "symbol": symbol,
@@ -177,16 +193,15 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
         elif (t["bybit_spot"] or t["bybit_linear"]) and get_bybit_15m:
             candles_15m = get_bybit_15m(symbol)
 
-        if candles_15m:
+        if candles_15m and not confirm_light_sent(state, cid):
             cl = confirm_light_eval(symbol, candles_15m)
             if cl.get("ok") and confirm_light_cooldown_ok(state, cid, CONFIRM_COOLDOWN):
                 exchange = "BINANCE" if t["binance"] else "BYBIT"
 
-                # анти-дубль
                 mark_confirm_light_sent(state, cid, _now())
                 save_state(state)
 
-                sheets.buffer_append({
+                safe_sheet_append(sheets, {
                     "detected_at": now_iso_utc(),
                     "cmc_id": cid,
                     "symbol": symbol,
@@ -201,7 +216,11 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
                     mode_hint="CONFIRM_LIGHT",
                 )
 
-    sheets.flush()
+    try:
+        sheets.flush()
+    except Exception as e:
+        print(f"Sheets flush skipped: {e}")
+
     save_state(state)
 
 
@@ -236,14 +255,10 @@ async def main():
         try:
             await scan_once(app, settings, cmc, sheets)
         except Exception as e:
-            try:
-                await safe_send(app, settings.chat_id, f"❌ Ошибка: {e}", parse_mode=None)
-            except Exception:
-                pass
+            print(f"SCAN LOOP ERROR: {e}")
 
         await asyncio.sleep(settings.check_interval_min * 60)
 
 
 if __name__ == "__main__":
     asyncio.run(main())
-
