@@ -35,8 +35,9 @@ from confirm_light import confirm_light_eval
 from candles_binance import get_candles_5m as get_binance_5m
 from candles_bybit import get_candles_5m as get_bybit_5m
 
-# EDGE LAYER
+# ===== EDGE LAYER =====
 from liquidity_growth import liquidity_growth_ok
+from liquidity_memory import liquidity_memory_ok
 
 try:
     from candles_binance import get_candles_15m as get_binance_15m
@@ -49,6 +50,7 @@ except Exception:
     get_bybit_15m = None
 
 
+# ================= ENV =================
 FIRST_COOLDOWN = int(os.getenv("FIRST_COOLDOWN_SEC", str(60 * 60)))
 CONFIRM_COOLDOWN = int(os.getenv("CONFIRM_COOLDOWN_SEC", str(2 * 60 * 60)))
 STARTUP_GUARD_SEC = int(os.getenv("STARTUP_GUARD_SEC", "3600"))
@@ -62,6 +64,7 @@ def _now():
     return float(time.time())
 
 
+# ================= SAFE SEND =================
 async def safe_send(app, chat_id, text, parse_mode=ParseMode.HTML, retries=3):
     last_err = None
     for _ in range(retries):
@@ -73,7 +76,7 @@ async def safe_send(app, chat_id, text, parse_mode=ParseMode.HTML, retries=3):
     raise last_err
 
 
-# FIXED — без двойных API вызовов
+# ================= DETECT TRADING =================
 def detect_trading(symbol):
     binance_ok = check_binance(symbol)
     bybit_spot_ok = check_bybit(symbol)
@@ -108,6 +111,7 @@ def anti_scam_filter(candles):
 
     price_range = (high_max - low_min) / max(low_min, 1e-12)
 
+    # 🚫 памп защита
     if price_range > ANTI_SCAM_MAX_RANGE:
         return False
 
@@ -115,6 +119,7 @@ def anti_scam_filter(candles):
     v1 = sum(volumes[:half])
     v2 = sum(volumes[half:])
 
+    # 🚫 dying volume
     if v1 > 0 and v2 < v1 * ANTI_SCAM_VOL_DROP_K:
         return False
 
@@ -202,11 +207,12 @@ async def scan_once(app, settings, cmc, sheets):
             elif t["bybit_spot"] or t["bybit_linear"]:
                 candles_5m = get_bybit_5m(symbol)
 
-            # EDGE STACK
+            # 🧠 FINAL EDGE STACK
             if (
                 candles_5m
                 and anti_scam_filter(candles_5m)
                 and liquidity_growth_ok(candles_5m)
+                and liquidity_memory_ok(candles_5m)
             ):
 
                 fm = first_move_eval(symbol, candles_5m)
@@ -307,4 +313,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
