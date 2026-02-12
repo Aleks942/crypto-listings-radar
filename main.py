@@ -39,6 +39,8 @@ from candles_bybit import get_candles_5m as get_bybit_5m
 from liquidity_growth import liquidity_growth_ok
 from liquidity_memory import liquidity_memory_ok
 from funding_flow import funding_crowd_ok   # 🧲 ТОЛПА ВХОДИТ
+from whale_trap import whale_trap_detect
+
 
 try:
     from candles_binance import get_candles_15m as get_binance_15m
