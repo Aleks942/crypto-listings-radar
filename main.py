@@ -35,7 +35,7 @@ from confirm_light import confirm_light_eval
 from candles_binance import get_candles_5m as get_binance_5m
 from candles_bybit import get_candles_5m as get_bybit_5m
 
-# ✅ EDGE FILTER (добавлено)
+# EDGE LAYER
 from liquidity_growth import liquidity_growth_ok
 
 try:
@@ -49,7 +49,6 @@ except Exception:
     get_bybit_15m = None
 
 
-# ================= ENV =================
 FIRST_COOLDOWN = int(os.getenv("FIRST_COOLDOWN_SEC", str(60 * 60)))
 CONFIRM_COOLDOWN = int(os.getenv("CONFIRM_COOLDOWN_SEC", str(2 * 60 * 60)))
 STARTUP_GUARD_SEC = int(os.getenv("STARTUP_GUARD_SEC", "3600"))
@@ -63,7 +62,6 @@ def _now():
     return float(time.time())
 
 
-# ================= SAFE SEND =================
 async def safe_send(app, chat_id, text, parse_mode=ParseMode.HTML, retries=3):
     last_err = None
     for _ in range(retries):
@@ -75,7 +73,7 @@ async def safe_send(app, chat_id, text, parse_mode=ParseMode.HTML, retries=3):
     raise last_err
 
 
-# ================= DETECT TRADING (FIXED) =================
+# FIXED — без двойных API вызовов
 def detect_trading(symbol):
     binance_ok = check_binance(symbol)
     bybit_spot_ok = check_bybit(symbol)
@@ -89,7 +87,7 @@ def detect_trading(symbol):
     }
 
 
-# ================= SHARP HUNTER FILTER =================
+# ================= SHARP FILTER =================
 def anti_scam_filter(candles):
 
     if not candles or len(candles) < ANTI_SCAM_MIN_CANDLES:
@@ -110,7 +108,6 @@ def anti_scam_filter(candles):
 
     price_range = (high_max - low_min) / max(low_min, 1e-12)
 
-    # 🚫 защита от пампа
     if price_range > ANTI_SCAM_MAX_RANGE:
         return False
 
@@ -118,7 +115,6 @@ def anti_scam_filter(candles):
     v1 = sum(volumes[:half])
     v2 = sum(volumes[half:])
 
-    # 🚫 dying volume
     if v1 > 0 and v2 < v1 * ANTI_SCAM_VOL_DROP_K:
         return False
 
@@ -145,7 +141,6 @@ async def scan_once(app, settings, cmc, sheets):
         mcap = float(usd.get("market_cap") or 0)
         age = age_days(coin.get("date_added"))
 
-        # 🎯 фильтр нужных монет
         if age is None or age > settings.max_age_days or vol < settings.min_volume_usd:
             continue
 
@@ -207,7 +202,7 @@ async def scan_once(app, settings, cmc, sheets):
             elif t["bybit_spot"] or t["bybit_linear"]:
                 candles_5m = get_bybit_5m(symbol)
 
-            # 🧠 SHARP HUNTER + LIQUIDITY EDGE
+            # EDGE STACK
             if (
                 candles_5m
                 and anti_scam_filter(candles_5m)
