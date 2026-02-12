@@ -4,13 +4,18 @@ from score_engine import Candle, score_market
 from entry_window import build_entry_plan
 
 
+# =====================================================
+# NORMALIZE CANDLES
+# =====================================================
 def _to_ohlcv_dict(c: Dict[str, Any]) -> Dict[str, float]:
     """
-    Унифицируем ключи.
+    Приводим свечи к единому виду.
+
     Поддерживаем оба формата:
     - {o,h,l,c,v}
     - {open,high,low,close,volume}
     """
+
     if "open" in c:
         return {
             "open": float(c["open"]),
@@ -19,6 +24,7 @@ def _to_ohlcv_dict(c: Dict[str, Any]) -> Dict[str, float]:
             "close": float(c["close"]),
             "volume": float(c.get("volume", 0)),
         }
+
     return {
         "open": float(c["o"]),
         "high": float(c["h"]),
@@ -28,33 +34,52 @@ def _to_ohlcv_dict(c: Dict[str, Any]) -> Dict[str, float]:
     }
 
 
+# =====================================================
+# FIRST MOVE ENGINE
+# =====================================================
 def first_move_eval(symbol: str, candles_raw: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     FIRST MOVE (5m)
+
+    Логика:
     - SCORE engine (A/B/C)
-    - импульс + закрытие
+    - Импульс + закрытие
     - ENTRY WINDOW (breakout/pullback/wait)
-    Возвращает dict: {ok, text, score}
+
+    Возвращает:
+    {ok, text, score, plan_mode}
     """
 
+    # --- базовая защита ---
     if not candles_raw or len(candles_raw) < 6:
         return {"ok": False, "reason": "Недостаточно свечей (нужно >= 6)"}
 
-    # --- приводим свечи к единому виду (dict) ---
+    # --- нормализация свечей ---
     ohlcv = [_to_ohlcv_dict(c) for c in candles_raw]
 
-    # --- для score_engine нужны Candle ---
+    # --- формат для score_engine ---
     candles = [
-        Candle(o=x["open"], h=x["high"], l=x["low"], c=x["close"], v=x["volume"])
+        Candle(
+            o=x["open"],
+            h=x["high"],
+            l=x["low"],
+            c=x["close"],
+            v=x["volume"],
+        )
         for x in ohlcv
     ]
 
-    # --- SCORE ---
+    # =====================================================
+    # SCORE ENGINE
+    # =====================================================
     score = score_market(candles)
+
     if score.letter == "C":
         return {"ok": False, "reason": f"SCORE C — {score.reason}"}
 
-    # --- базовая логика импульса ---
+    # =====================================================
+    # ИМПУЛЬС
+    # =====================================================
     last = ohlcv[-1]
     prev = ohlcv[-2]
 
@@ -67,17 +92,20 @@ def first_move_eval(symbol: str, candles_raw: List[Dict[str, Any]]) -> Dict[str,
     if not (impulse_ok and close_strong):
         return {"ok": False, "reason": "Нет импульса или слабое закрытие"}
 
-    # --- ENTRY WINDOW (ШАГ 4) ---
+    # =====================================================
+    # ENTRY WINDOW (ШАГ 4)
+    # =====================================================
     plan = build_entry_plan(ohlcv, tf="5m")
 
     if plan.mode == "WAIT":
         return {"ok": False, "reason": "WAIT: нет адекватного окна входа"}
 
-    # --- формируем сообщение ---
-    def f(x: float | None) -> str:
+    # =====================================================
+    # FORMAT MESSAGE
+    # =====================================================
+    def f(x):
         return "—" if x is None else f"{x:.6f}"
 
-    # риск-менеджмент (консервативно)
     risk_note = "0.25% депо (консервативно)"
 
     text = (
@@ -99,4 +127,9 @@ def first_move_eval(symbol: str, candles_raw: List[Dict[str, Any]]) -> Dict[str,
         "• Остаток в BE\n"
     )
 
-    return {"ok": True, "score": score.letter, "text": text, "plan_mode": plan.mode}
+    return {
+        "ok": True,
+        "score": score.letter,
+        "text": text,
+        "plan_mode": plan.mode,
+    }
