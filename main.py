@@ -24,8 +24,8 @@ from state import (
     confirm_light_cooldown_ok,
     startup_sent_recent,
     mark_startup_sent,
-    ultra_seen,          # ✅ ULTRA hard anti-duplicate
-    mark_ultra_seen,     # ✅ ULTRA hard anti-duplicate
+    ultra_seen,
+    mark_ultra_seen,
 )
 
 from detect_trading import check_binance, check_bybit, check_bybit_linear
@@ -46,55 +46,41 @@ except Exception:
     get_bybit_15m = None
 
 
-# =======================
-# ENV
-# =======================
 FIRST_COOLDOWN = int(os.getenv("FIRST_COOLDOWN_SEC", str(60 * 60)))
 CONFIRM_COOLDOWN = int(os.getenv("CONFIRM_COOLDOWN_SEC", str(2 * 60 * 60)))
 STARTUP_GUARD_SEC = int(os.getenv("STARTUP_GUARD_SEC", "3600"))
 
-# Anti-scam knobs (можно менять env при желании)
 ANTI_SCAM_MIN_CANDLES = int(os.getenv("ANTI_SCAM_MIN_CANDLES", "25"))
-ANTI_SCAM_MAX_RANGE = float(os.getenv("ANTI_SCAM_MAX_RANGE", "2.5"))   # 2.5 = 250%
-ANTI_SCAM_VOL_DROP_K = float(os.getenv("ANTI_SCAM_VOL_DROP_K", "0.7")) # v2 must be >= v1*0.7
+ANTI_SCAM_MAX_RANGE = float(os.getenv("ANTI_SCAM_MAX_RANGE", "2.5"))
+ANTI_SCAM_VOL_DROP_K = float(os.getenv("ANTI_SCAM_VOL_DROP_K", "0.7"))
 
 
-def _now() -> float:
+def _now():
     return float(time.time())
 
 
-async def safe_send(app: Application, chat_id: str, text: str, parse_mode=ParseMode.HTML, retries: int = 3):
+async def safe_send(app, chat_id, text, parse_mode=ParseMode.HTML, retries=3):
     last_err = None
     for _ in range(retries):
         try:
             return await app.bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
-        except (BrokenPipeError, ConnectionResetError, OSError) as e:
+        except Exception as e:
             last_err = e
             await asyncio.sleep(1.5)
     raise last_err
 
 
-def detect_trading(symbol: str) -> dict:
-    binance_ok = check_binance(symbol)
-    bybit_spot_ok = check_bybit(symbol)
-    bybit_linear_ok = check_bybit_linear(symbol)
+def detect_trading(symbol):
     return {
-        "binance": binance_ok,
-        "bybit_spot": bybit_spot_ok,
-        "bybit_linear": bybit_linear_ok,
-        "any": binance_ok or bybit_spot_ok or bybit_linear_ok,
+        "binance": check_binance(symbol),
+        "bybit_spot": check_bybit(symbol),
+        "bybit_linear": check_bybit_linear(symbol),
+        "any": check_binance(symbol) or check_bybit(symbol) or check_bybit_linear(symbol),
     }
 
 
-# =======================
-# Anti-scam filter (5m)
-# =======================
-def anti_scam_filter(candles: list) -> bool:
-    """
-    True  -> можно считать монету "живой" для FIRST_MOVE
-    False -> мусор/тонко/дикий памп/мало истории
-    Ожидаемый формат свечи: [ts, open, high, low, close, volume, ...]
-    """
+# ================= SHARP HUNTER FILTER =================
+def anti_scam_filter(candles):
 
     if not candles or len(candles) < ANTI_SCAM_MIN_CANDLES:
         return False
@@ -106,32 +92,32 @@ def anti_scam_filter(candles: list) -> bool:
     except Exception:
         return False
 
-    low_min = min(lows) if lows else 0.0
-    high_max = max(highs) if highs else 0.0
+    low_min = min(lows)
+    high_max = max(highs)
 
     if low_min <= 0:
         return False
 
-    # Диапазон слишком дикий -> часто мем/скам/тонкая манипуляция
     price_range = (high_max - low_min) / max(low_min, 1e-12)
+
+    # 🚫 защита от пампов
     if price_range > ANTI_SCAM_MAX_RANGE:
         return False
 
-    # Проверка "объём не умирает": во второй половине не должно быть резкого провала
     half = len(volumes) // 2
-    v1 = sum(volumes[:half]) if half > 0 else sum(volumes)
-    v2 = sum(volumes[half:]) if half > 0 else sum(volumes)
+    v1 = sum(volumes[:half])
+    v2 = sum(volumes[half:])
 
+    # 🚫 защита от dying volume
     if v1 > 0 and v2 < v1 * ANTI_SCAM_VOL_DROP_K:
         return False
 
     return True
 
 
-# =======================
-# SCAN LOOP
-# =======================
-async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets: SheetsClient):
+# ======================================================
+async def scan_once(app, settings, cmc, sheets):
+
     state = load_state()
     seen = seen_ids(state)
     tracked = tracked_ids(state)
@@ -139,6 +125,7 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
     coins = cmc.fetch_recent_listings(limit=settings.limit)
 
     for coin in coins:
+
         cid = int(coin.get("id") or 0)
         if not cid:
             continue
@@ -148,22 +135,21 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
         mcap = float(usd.get("market_cap") or 0)
         age = age_days(coin.get("date_added"))
 
-        # фильтр интересующих монет
         if age is None or age > settings.max_age_days or vol < settings.min_volume_usd:
             continue
 
         symbol = (coin.get("symbol") or "").strip()
         name = (coin.get("name") or "").strip()
 
-        # ---------- ULTRA (HARD LOCK) ----------
+        # ================= ULTRA =================
         if cid not in seen and not ultra_seen(state, cid):
+
             await safe_send(
                 app,
                 settings.chat_id,
                 f"⚡ <b>ULTRA-EARLY</b>\n\n<b>{name}</b> ({symbol})",
             )
 
-            # пишем ТОЛЬКО событие
             sheets.buffer_append({
                 "detected_at": now_iso_utc(),
                 "cmc_id": cid,
@@ -176,13 +162,14 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
             })
 
             mark_seen(state, cid)
-            mark_ultra_seen(state, cid)  # ✅ вечный антидубль ULTRA
+            mark_ultra_seen(state, cid)
             save_state(state)
 
         already_tracked = cid in tracked
 
-        # ---------- TRADING FOUND / TRACK ----------
+        # ================= TRACK =================
         if not already_tracked:
+
             t = detect_trading(symbol)
             if not t["any"]:
                 continue
@@ -197,12 +184,11 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
                 "status": "TRACK",
             })
         else:
-            # если уже tracked — всё равно можем проверить где торгуется сейчас
             t = detect_trading(symbol)
 
-        # ---------- FIRST MOVE ----------
-        # логика сохранена: если CONFIRM_LIGHT уже был, FIRST_MOVE больше не нужен
+        # ================= FIRST MOVE =================
         if not confirm_light_sent(state, cid):
+
             candles_5m = []
 
             if t["binance"]:
@@ -210,11 +196,13 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
             elif t["bybit_spot"] or t["bybit_linear"]:
                 candles_5m = get_bybit_5m(symbol)
 
-            # ✅ новый фильтр мусора: только если свечи "живые"
+            # 🧠 SHARP HUNTER FILTER ВКЛЮЧЕН
             if candles_5m and anti_scam_filter(candles_5m):
+
                 fm = first_move_eval(symbol, candles_5m)
 
                 if fm.get("ok") and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN):
+
                     await safe_send(app, settings.chat_id, fm["text"])
 
                     sheets.buffer_append({
@@ -227,7 +215,7 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
                     mark_first_move_sent(state, cid, _now())
                     save_state(state)
 
-        # ---------- CONFIRM LIGHT ----------
+        # ================= CONFIRM LIGHT =================
         candles_15m = []
 
         if t["binance"] and get_binance_15m:
@@ -236,12 +224,13 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
             candles_15m = get_bybit_15m(symbol)
 
         if candles_15m:
+
             cl = confirm_light_eval(symbol, candles_15m)
 
             if cl.get("ok") and confirm_light_cooldown_ok(state, cid, CONFIRM_COOLDOWN):
+
                 exchange = "BINANCE" if t["binance"] else "BYBIT"
 
-                # анти-дубль confirm_light
                 mark_confirm_light_sent(state, cid, _now())
                 save_state(state)
 
@@ -264,10 +253,9 @@ async def scan_once(app: Application, settings: Settings, cmc: CMCClient, sheets
     save_state(state)
 
 
-# =======================
-# MAIN
-# =======================
+# ======================================================
 async def main():
+
     settings = Settings.load()
 
     app = Application.builder().token(settings.bot_token).build()
@@ -285,11 +273,13 @@ async def main():
     state = load_state()
 
     if not startup_sent_recent(state, cooldown_sec=STARTUP_GUARD_SEC):
+
         await safe_send(
             app,
             settings.chat_id,
             "📡 Listings Radar запущен\nULTRA → TRACK → FIRST MOVE → CONFIRM_LIGHT",
         )
+
         mark_startup_sent(state)
         save_state(state)
 
@@ -307,3 +297,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
