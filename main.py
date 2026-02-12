@@ -35,9 +35,10 @@ from confirm_light import confirm_light_eval
 from candles_binance import get_candles_5m as get_binance_5m
 from candles_bybit import get_candles_5m as get_bybit_5m
 
-# ===== EDGE LAYER =====
+# EDGE LAYERS
 from liquidity_growth import liquidity_growth_ok
 from liquidity_memory import liquidity_memory_ok
+from funding_flow import funding_crowd_ok   # 🧲 ТОЛПА ВХОДИТ
 
 try:
     from candles_binance import get_candles_15m as get_binance_15m
@@ -50,7 +51,6 @@ except Exception:
     get_bybit_15m = None
 
 
-# ================= ENV =================
 FIRST_COOLDOWN = int(os.getenv("FIRST_COOLDOWN_SEC", str(60 * 60)))
 CONFIRM_COOLDOWN = int(os.getenv("CONFIRM_COOLDOWN_SEC", str(2 * 60 * 60)))
 STARTUP_GUARD_SEC = int(os.getenv("STARTUP_GUARD_SEC", "3600"))
@@ -111,7 +111,6 @@ def anti_scam_filter(candles):
 
     price_range = (high_max - low_min) / max(low_min, 1e-12)
 
-    # 🚫 памп защита
     if price_range > ANTI_SCAM_MAX_RANGE:
         return False
 
@@ -119,7 +118,6 @@ def anti_scam_filter(candles):
     v1 = sum(volumes[:half])
     v2 = sum(volumes[half:])
 
-    # 🚫 dying volume
     if v1 > 0 and v2 < v1 * ANTI_SCAM_VOL_DROP_K:
         return False
 
@@ -158,17 +156,13 @@ async def scan_once(app, settings, cmc, sheets):
             await safe_send(
                 app,
                 settings.chat_id,
-                f"⚡ <b>ULTRA-EARLY</b>\n\n<b>{name}</b> ({symbol})",
+                f"⚡ <b>ULTRA-EARLY</b>\n(Раннее обнаружение листинга)\n\n<b>{name}</b> ({symbol})",
             )
 
             sheets.buffer_append({
                 "detected_at": now_iso_utc(),
                 "cmc_id": cid,
                 "symbol": symbol,
-                "name": name,
-                "age_days": age,
-                "market_cap_usd": mcap,
-                "volume24h_usd": vol,
                 "status": "ULTRA",
             })
 
@@ -197,6 +191,22 @@ async def scan_once(app, settings, cmc, sheets):
         else:
             t = detect_trading(symbol)
 
+        # ================= CROWD FLOW =================
+        if funding_crowd_ok(symbol):
+
+            await safe_send(
+                app,
+                settings.chat_id,
+                f"🟢 <b>CROWD FLOW</b>\n(Толпа вошла — рынок заряжается)\n\n<b>{symbol}</b>",
+            )
+
+            sheets.buffer_append({
+                "detected_at": now_iso_utc(),
+                "cmc_id": cid,
+                "symbol": symbol,
+                "status": "CROWD_FLOW",
+            })
+
         # ================= FIRST MOVE =================
         if not confirm_light_sent(state, cid):
 
@@ -207,19 +217,22 @@ async def scan_once(app, settings, cmc, sheets):
             elif t["bybit_spot"] or t["bybit_linear"]:
                 candles_5m = get_bybit_5m(symbol)
 
-            # 🧠 FINAL EDGE STACK
             if (
                 candles_5m
                 and anti_scam_filter(candles_5m)
                 and liquidity_growth_ok(candles_5m)
-                and liquidity_memory_ok(candles_5m)
+                and liquidity_memory_ok(symbol, candles_5m)
             ):
 
                 fm = first_move_eval(symbol, candles_5m)
 
                 if fm.get("ok") and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN):
 
-                    await safe_send(app, settings.chat_id, fm["text"])
+                    await safe_send(
+                        app,
+                        settings.chat_id,
+                        fm["text"] + "\n\n(Импульс начался — возможный ранний вход)",
+                    )
 
                     sheets.buffer_append({
                         "detected_at": now_iso_utc(),
@@ -293,7 +306,7 @@ async def main():
         await safe_send(
             app,
             settings.chat_id,
-            "📡 Listings Radar запущен\nULTRA → TRACK → FIRST MOVE → CONFIRM_LIGHT",
+            "📡 Listings Radar запущен\n(Радар листингов активирован)",
         )
 
         mark_startup_sent(state)
