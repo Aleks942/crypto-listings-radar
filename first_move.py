@@ -9,11 +9,11 @@ from entry_window import build_entry_plan
 # =====================================================
 def _to_ohlcv_dict(c: Dict[str, Any]) -> Dict[str, float]:
     """
-    Приводим свечи к единому виду.
+    Унификация формата свечей.
 
-    Поддерживаем оба формата:
-    - {o,h,l,c,v}
-    - {open,high,low,close,volume}
+    Поддержка:
+    {o,h,l,c,v}
+    {open,high,low,close,volume}
     """
 
     if "open" in c:
@@ -35,29 +35,21 @@ def _to_ohlcv_dict(c: Dict[str, Any]) -> Dict[str, float]:
 
 
 # =====================================================
-# FIRST MOVE ENGINE
+# FIRST MOVE ENGINE (SHARP VERSION)
 # =====================================================
 def first_move_eval(symbol: str, candles_raw: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    FIRST MOVE (5m)
 
-    Логика:
-    - SCORE engine (A/B/C)
-    - Импульс + закрытие
-    - ENTRY WINDOW (breakout/pullback/wait)
-
-    Возвращает:
-    {ok, text, score, plan_mode}
-    """
-
-    # --- базовая защита ---
+    # --------------------------
+    # Базовая защита
+    # --------------------------
     if not candles_raw or len(candles_raw) < 6:
-        return {"ok": False, "reason": "Недостаточно свечей (нужно >= 6)"}
+        return {"ok": False, "reason": "Недостаточно свечей"}
 
-    # --- нормализация свечей ---
+    # --------------------------
+    # Нормализация
+    # --------------------------
     ohlcv = [_to_ohlcv_dict(c) for c in candles_raw]
 
-    # --- формат для score_engine ---
     candles = [
         Candle(
             o=x["open"],
@@ -78,7 +70,7 @@ def first_move_eval(symbol: str, candles_raw: List[Dict[str, Any]]) -> Dict[str,
         return {"ok": False, "reason": f"SCORE C — {score.reason}"}
 
     # =====================================================
-    # ИМПУЛЬС
+    # ИМПУЛЬС (УЛУЧШЕННЫЙ)
     # =====================================================
     last = ohlcv[-1]
     prev = ohlcv[-2]
@@ -89,16 +81,28 @@ def first_move_eval(symbol: str, candles_raw: List[Dict[str, Any]]) -> Dict[str,
     impulse_ok = last_range >= 1.2 * prev_range
     close_strong = last["close"] > (last["low"] + 0.5 * last_range)
 
-    if not (impulse_ok and close_strong):
-        return {"ok": False, "reason": "Нет импульса или слабое закрытие"}
+    # 🔥 дополнительный фильтр: объём должен расти
+    vol_impulse = last["volume"] >= prev["volume"] * 1.1
+
+    if not (impulse_ok and close_strong and vol_impulse):
+        return {"ok": False, "reason": "Нет сильного импульса"}
 
     # =====================================================
-    # ENTRY WINDOW (ШАГ 4)
+    # ENTRY WINDOW
     # =====================================================
     plan = build_entry_plan(ohlcv, tf="5m")
 
     if plan.mode == "WAIT":
-        return {"ok": False, "reason": "WAIT: нет адекватного окна входа"}
+        return {"ok": False, "reason": "WAIT — окно входа не готово"}
+
+    # =====================================================
+    # РУССКИЙ ПЕРЕВОД MODE (как ты просил)
+    # =====================================================
+    mode_ru = {
+        "BREAKOUT": "Пробой уровня — вход на ускорении",
+        "PULLBACK": "Откат — вход после возврата цены",
+        "CONTINUATION": "Продолжение движения",
+    }.get(plan.mode, "Стандартный вход")
 
     # =====================================================
     # FORMAT MESSAGE
@@ -106,25 +110,30 @@ def first_move_eval(symbol: str, candles_raw: List[Dict[str, Any]]) -> Dict[str,
     def f(x):
         return "—" if x is None else f"{x:.6f}"
 
-    risk_note = "0.25% депо (консервативно)"
+    risk_note = "0.25% депо (консервативный риск)"
 
     text = (
         "🟢 <b>FIRST MOVE</b> — ENTRY WINDOW\n\n"
         f"<b>{symbol}</b>\n"
         f"SCORE: <b>{score.letter}</b> ({score.points}/4)\n\n"
-        "<b>Почему</b>:\n"
+        "🧠 <b>Почему сигнал</b>:\n"
         f"• {score.reason}\n"
-        "• Импульс x1.2+ и сильное закрытие\n\n"
-        "<b>План входа</b>:\n"
+        "• Импульс x1.2+ + рост объёма\n"
+        "• Сильное закрытие свечи\n\n"
+        "🎯 <b>План входа</b>:\n"
         f"• Mode: <b>{plan.mode}</b>\n"
+        f"• Что это значит: {mode_ru}\n"
         f"• Entry: <b>{f(plan.entry)}</b>\n"
         f"• Stop: <b>{f(plan.stop)}</b>\n"
         f"• Invalidation: <b>{f(plan.invalidation)}</b>\n\n"
-        "<b>Риск</b>:\n"
+        "⚠️ <b>Действие</b>:\n"
+        "• Толпа начинает входить — готовность к импульсу\n"
+        "• Вход только по плану, не по эмоциям\n\n"
+        "💰 <b>Риск</b>:\n"
         f"• {risk_note}\n\n"
-        "<b>Exit (база)</b>:\n"
+        "📌 <b>Exit база</b>:\n"
         "• TP1 = +1R → фикс 50%\n"
-        "• Остаток в BE\n"
+        "• Остаток → BE\n"
     )
 
     return {
