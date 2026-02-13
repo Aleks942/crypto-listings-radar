@@ -130,6 +130,31 @@ def smart_silence_filter(candles: List[Dict[str, Any]]) -> bool:
 
 
 # ==================================
+# ⚡ EARLY MOMENTUM SHIFT (НОВОЕ)
+# ==================================
+
+def early_momentum_shift(candles: List[Dict[str, Any]]) -> bool:
+    """
+    Ранний сигнал ускорения рынка:
+    рост максимумов + рост объёма
+    """
+
+    if not candles or len(candles) < 5:
+        return False
+
+    try:
+        highs = [float(c[2]) for c in candles]
+        volumes = [float(c[5]) for c in candles]
+    except Exception:
+        return False
+
+    higher_highs = highs[-1] > highs[-2] > highs[-3]
+    rising_volume = volumes[-1] > volumes[-2]
+
+    return higher_highs and rising_volume
+
+
+# ==================================
 # 🔥 ОБЩИЙ CROWD SIGNAL (FINAL PRO)
 # ==================================
 
@@ -141,6 +166,7 @@ def crowd_engine_signal(candles: List[Dict[str, Any]]) -> bool:
     V2
     FAST SECOND WAVE
     PRESSURE BUILD
+    EARLY MOMENTUM SHIFT
     + SMART SILENCE FILTER
     """
 
@@ -149,9 +175,10 @@ def crowd_engine_signal(candles: List[Dict[str, Any]]) -> bool:
         v2_ok = crowd_wave_v2(candles)
         fast_ok = second_wave_detect(candles)
         pressure_ok = crowd_pressure_build(candles)
+        early_ok = early_momentum_shift(candles)
         silence_ok = smart_silence_filter(candles)
 
-        return (pro_ok or v2_ok or fast_ok or pressure_ok) and silence_ok
+        return (pro_ok or v2_ok or fast_ok or pressure_ok or early_ok) and silence_ok
 
     except Exception:
         return False
