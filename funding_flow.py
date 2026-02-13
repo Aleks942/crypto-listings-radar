@@ -1,16 +1,9 @@
-# funding_flow.py
-
-def funding_flow_ok(symbol: str) -> bool:
+def funding_crowd_ok(symbol: str) -> bool:
     """
-    ВРЕМЕННАЯ ЗАГЛУШКА.
-
-    Сейчас всегда возвращает True,
+    PRO слой: сигнал толпы.
+    Пока это безопасная заглушка,
     чтобы бот не падал.
-
-    Позже сюда можно подключить:
-    - funding rate
-    - open interest
-    - perp pressure
     """
 
-    return True
+    # позже подключим реальные данные funding / OI
+    return False
