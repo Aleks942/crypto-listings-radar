@@ -22,6 +22,8 @@ from state import (
     confirm_light_sent,
     mark_confirm_light_sent,
     confirm_light_cooldown_ok,
+    startup_sent_recent,
+    mark_startup_sent,
     ultra_seen,
     mark_ultra_seen,
 )
@@ -33,12 +35,18 @@ from confirm_light import confirm_light_eval
 from candles_binance import get_candles_5m as get_binance_5m
 from candles_bybit import get_candles_5m as get_bybit_5m
 
+# ================= EDGE LAYERS =================
 from crowd_engine import crowd_engine_signal
 from liquidity_growth import liquidity_growth_ok
 from liquidity_memory import liquidity_memory_ok
+
+# funding слой (может быть заглушкой внутри funding_flow.py)
 from funding_flow import funding_crowd_ok
 
+# whale_trap пока не используем в логике, но импорт можно оставить
+# from whale_trap import whale_trap_detect
 
+# 15m candles optional
 try:
     from candles_binance import get_candles_15m as get_binance_15m
 except Exception:
@@ -50,17 +58,24 @@ except Exception:
     get_bybit_15m = None
 
 
+# ================= ENV =================
 FIRST_COOLDOWN = int(os.getenv("FIRST_COOLDOWN_SEC", str(60 * 60)))
 CONFIRM_COOLDOWN = int(os.getenv("CONFIRM_COOLDOWN_SEC", str(2 * 60 * 60)))
+STARTUP_GUARD_SEC = int(os.getenv("STARTUP_GUARD_SEC", "3600"))
+
 ANTI_SCAM_MIN_CANDLES = int(os.getenv("ANTI_SCAM_MIN_CANDLES", "25"))
 ANTI_SCAM_MAX_RANGE = float(os.getenv("ANTI_SCAM_MAX_RANGE", "2.5"))
 ANTI_SCAM_VOL_DROP_K = float(os.getenv("ANTI_SCAM_VOL_DROP_K", "0.7"))
+
+# сколько минут помнить толпу (по умолчанию 20 минут)
+CROWD_MEMORY_SEC = int(os.getenv("CROWD_MEMORY_SEC", "1200"))
 
 
 def _now():
     return float(time.time())
 
 
+# ================= SAFE SEND =================
 async def safe_send(app, chat_id, text, parse_mode=ParseMode.HTML, retries=3):
     last_err = None
     for _ in range(retries):
@@ -72,6 +87,7 @@ async def safe_send(app, chat_id, text, parse_mode=ParseMode.HTML, retries=3):
     raise last_err
 
 
+# ================= DETECT TRADING =================
 def detect_trading(symbol):
     binance_ok = check_binance(symbol)
     bybit_spot_ok = check_bybit(symbol)
@@ -85,6 +101,7 @@ def detect_trading(symbol):
     }
 
 
+# ================= SHARP FILTER =================
 def anti_scam_filter(candles):
     if not candles or len(candles) < ANTI_SCAM_MIN_CANDLES:
         return False
@@ -116,6 +133,7 @@ def anti_scam_filter(candles):
     return True
 
 
+# ================= SCAN LOOP =================
 async def scan_once(app, settings, cmc, sheets):
     state = load_state()
     seen = seen_ids(state)
@@ -138,66 +156,169 @@ async def scan_once(app, settings, cmc, sheets):
         symbol = (coin.get("symbol") or "").strip()
         name = (coin.get("name") or "").strip()
 
-        # ===== ULTRA =====
+        # ================= ULTRA =================
         if cid not in seen and not ultra_seen(state, cid):
             await safe_send(
                 app,
                 settings.chat_id,
-                f"⚡ <b>ULTRA-EARLY</b>\n\n<b>{name}</b> ({symbol})",
+                f"⚡ <b>ULTRA-EARLY</b>\n(Раннее обнаружение листинга)\n\n<b>{name}</b> ({symbol})",
             )
+
+            sheets.buffer_append({
+                "detected_at": now_iso_utc(),
+                "cmc_id": cid,
+                "symbol": symbol,
+                "status": "ULTRA",
+            })
+
             mark_seen(state, cid)
             mark_ultra_seen(state, cid)
             save_state(state)
 
-        # ===== TRACK =====
+        # ================= TRACK =================
         already_tracked = cid in tracked
         if not already_tracked:
             t = detect_trading(symbol)
             if not t["any"]:
                 continue
+
             mark_tracked(state, cid)
             save_state(state)
+
+            sheets.buffer_append({
+                "detected_at": now_iso_utc(),
+                "cmc_id": cid,
+                "symbol": symbol,
+                "status": "TRACK",
+            })
         else:
             t = detect_trading(symbol)
 
+        # ================= GET 5m candles (one time) =================
         candles_5m = []
         if t["binance"]:
             candles_5m = get_binance_5m(symbol)
         elif t["bybit_spot"] or t["bybit_linear"]:
             candles_5m = get_bybit_5m(symbol)
 
-        # ===== CROWD FLOW =====
+        # ================= CROWD FLOW (funding/OI placeholder) =================
+        # отдельный сигнал, не ломает FIRST_MOVE
         try:
             if funding_crowd_ok(symbol):
-                await safe_send(app, settings.chat_id, f"🟢 <b>CROWD FLOW</b>\n<b>{symbol}</b>")
+                await safe_send(
+                    app,
+                    settings.chat_id,
+                    f"🟢 <b>CROWD FLOW</b>\n(Толпа вошла — рынок заряжается)\n\n<b>{symbol}</b>",
+                )
+
+                sheets.buffer_append({
+                    "detected_at": now_iso_utc(),
+                    "cmc_id": cid,
+                    "symbol": symbol,
+                    "status": "CROWD_FLOW",
+                })
         except Exception:
             pass
 
-        # ===== CROWD ENGINE =====
+        # ================= CROWD ENGINE + MOMENTUM MEMORY =================
+        crowd_recent = False
+
         try:
             if candles_5m and crowd_engine_signal(candles_5m):
+                crowd_recent = True
                 state.setdefault("crowd_memory", {})[str(cid)] = _now()
-                await safe_send(app, settings.chat_id, f"🟢 <b>CROWD ENGINE</b>\n<b>{symbol}</b>")
+
+                await safe_send(
+                    app,
+                    settings.chat_id,
+                    f"🟢 <b>CROWD ENGINE</b>\n(Толпа начала входить — приготовиться к выстрелу)\n\n<b>{symbol}</b>",
+                )
+
+                sheets.buffer_append({
+                    "detected_at": now_iso_utc(),
+                    "cmc_id": cid,
+                    "symbol": symbol,
+                    "status": "CROWD_ENGINE",
+                })
         except Exception:
             pass
 
-        # ===== FIRST MOVE =====
-        if not confirm_light_sent(state, cid):
-            anti_ok = anti_scam_filter(candles_5m)
-            liq_growth = liquidity_growth_ok(candles_5m)
-            liq_memory = liquidity_memory_ok(symbol, candles_5m)
+        # память толпы (например 20 минут)
+        try:
+            crowd_ts = state.get("crowd_memory", {}).get(str(cid))
+            if crowd_ts and _now() - crowd_ts < CROWD_MEMORY_SEC:
+                crowd_recent = True
+        except Exception:
+            pass
 
-            if candles_5m and anti_ok and liq_growth and liq_memory:
+        # ================= FIRST MOVE =================
+        if not confirm_light_sent(state, cid):
+            if (
+                candles_5m
+                and anti_scam_filter(candles_5m)
+                and liquidity_growth_ok(candles_5m)
+                and liquidity_memory_ok(symbol, candles_5m)
+            ):
                 fm = first_move_eval(symbol, candles_5m)
 
                 if fm.get("ok") and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN):
-                    await safe_send(app, settings.chat_id, fm["text"])
+
+                    # 🔥 CROWD BOOST (если толпа была недавно)
+                    if crowd_recent:
+                        fm["text"] = "🔥 CROWD BOOSTED\n" + fm["text"]
+
+                    await safe_send(
+                        app,
+                        settings.chat_id,
+                        fm["text"] + "\n\n<b>Действие:</b> импульс начался → следи за входом по плану (Entry/Stop).",
+                    )
+
+                    sheets.buffer_append({
+                        "detected_at": now_iso_utc(),
+                        "cmc_id": cid,
+                        "symbol": symbol,
+                        "status": "FIRST_MOVE",
+                    })
+
                     mark_first_move_sent(state, cid, _now())
                     save_state(state)
 
+        # ================= CONFIRM LIGHT =================
+        candles_15m = []
+        if t["binance"] and get_binance_15m:
+            candles_15m = get_binance_15m(symbol)
+        elif (t["bybit_spot"] or t["bybit_linear"]) and get_bybit_15m:
+            candles_15m = get_bybit_15m(symbol)
+
+        if candles_15m:
+            cl = confirm_light_eval(symbol, candles_15m)
+
+            if cl.get("ok") and confirm_light_cooldown_ok(state, cid, CONFIRM_COOLDOWN):
+                exchange = "BINANCE" if t["binance"] else "BYBIT"
+
+                mark_confirm_light_sent(state, cid, _now())
+                save_state(state)
+
+                sheets.buffer_append({
+                    "detected_at": now_iso_utc(),
+                    "cmc_id": cid,
+                    "symbol": symbol,
+                    "status": "CONFIRM_LIGHT",
+                })
+
+                send_to_confirm_entry(
+                    symbol=symbol,
+                    exchange=exchange,
+                    tf="15m",
+                    candles=candles_15m,
+                    mode_hint="CONFIRM_LIGHT",
+                )
+
+    sheets.flush()
     save_state(state)
 
 
+# ================= MAIN =================
 async def main():
     settings = Settings.load()
 
@@ -213,12 +334,18 @@ async def main():
     await app.initialize()
     await app.start()
 
-    # 🔥 ВСЕГДА ШЛЁМ ПИНГ ПРИ СТАРТЕ
+    # ✅ Всегда пингуем при старте контейнера (чтобы ты видел, что бот жив)
     await safe_send(
         app,
         settings.chat_id,
         "✅ Listings Radar ONLINE\n(бот запущен и работает)",
     )
+
+    # guard можно оставить как метку (не мешает)
+    state = load_state()
+    if not startup_sent_recent(state, cooldown_sec=STARTUP_GUARD_SEC):
+        mark_startup_sent(state)
+        save_state(state)
 
     while True:
         try:
