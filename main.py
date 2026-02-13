@@ -35,13 +35,13 @@ from confirm_light import confirm_light_eval
 from candles_binance import get_candles_5m as get_binance_5m
 from candles_bybit import get_candles_5m as get_bybit_5m
 
-# EDGE LAYERS
+# ================= EDGE LAYERS =================
 from liquidity_growth import liquidity_growth_ok
 from liquidity_memory import liquidity_memory_ok
-from funding_flow import funding_crowd_ok   # 🧲 ТОЛПА ВХОДИТ
+from funding_flow import funding_crowd_ok
 from whale_trap import whale_trap_detect
 
-
+# 15m candles optional
 try:
     from candles_binance import get_candles_15m as get_binance_15m
 except Exception:
@@ -53,6 +53,7 @@ except Exception:
     get_bybit_15m = None
 
 
+# ================= ENV =================
 FIRST_COOLDOWN = int(os.getenv("FIRST_COOLDOWN_SEC", str(60 * 60)))
 CONFIRM_COOLDOWN = int(os.getenv("CONFIRM_COOLDOWN_SEC", str(2 * 60 * 60)))
 STARTUP_GUARD_SEC = int(os.getenv("STARTUP_GUARD_SEC", "3600"))
@@ -194,20 +195,23 @@ async def scan_once(app, settings, cmc, sheets):
             t = detect_trading(symbol)
 
         # ================= CROWD FLOW =================
-        if funding_crowd_ok(symbol):
+        try:
+            if funding_crowd_ok(symbol):
 
-            await safe_send(
-                app,
-                settings.chat_id,
-                f"🟢 <b>CROWD FLOW</b>\n(Толпа вошла — рынок заряжается)\n\n<b>{symbol}</b>",
-            )
+                await safe_send(
+                    app,
+                    settings.chat_id,
+                    f"🟢 <b>CROWD FLOW</b>\n(Толпа вошла — рынок заряжается)\n\n<b>{symbol}</b>",
+                )
 
-            sheets.buffer_append({
-                "detected_at": now_iso_utc(),
-                "cmc_id": cid,
-                "symbol": symbol,
-                "status": "CROWD_FLOW",
-            })
+                sheets.buffer_append({
+                    "detected_at": now_iso_utc(),
+                    "cmc_id": cid,
+                    "symbol": symbol,
+                    "status": "CROWD_FLOW",
+                })
+        except Exception:
+            pass
 
         # ================= FIRST MOVE =================
         if not confirm_light_sent(state, cid):
@@ -328,5 +332,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
 
