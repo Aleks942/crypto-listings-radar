@@ -1,4 +1,3 @@
-# (твои импорты остаются как были)
 import asyncio
 import os
 import time
@@ -8,6 +7,7 @@ from telegram.ext import Application
 from config import Settings
 from cmc import CMCClient, age_days
 from sheets import SheetsClient, now_iso_utc
+
 from confirm_entry_client import send_to_confirm_entry
 
 from state import (
@@ -22,8 +22,6 @@ from state import (
     confirm_light_sent,
     mark_confirm_light_sent,
     confirm_light_cooldown_ok,
-    startup_sent_recent,
-    mark_startup_sent,
     ultra_seen,
     mark_ultra_seen,
 )
@@ -54,8 +52,6 @@ except Exception:
 
 FIRST_COOLDOWN = int(os.getenv("FIRST_COOLDOWN_SEC", str(60 * 60)))
 CONFIRM_COOLDOWN = int(os.getenv("CONFIRM_COOLDOWN_SEC", str(2 * 60 * 60)))
-STARTUP_GUARD_SEC = int(os.getenv("STARTUP_GUARD_SEC", "3600"))
-
 ANTI_SCAM_MIN_CANDLES = int(os.getenv("ANTI_SCAM_MIN_CANDLES", "25"))
 ANTI_SCAM_MAX_RANGE = float(os.getenv("ANTI_SCAM_MAX_RANGE", "2.5"))
 ANTI_SCAM_VOL_DROP_K = float(os.getenv("ANTI_SCAM_VOL_DROP_K", "0.7"))
@@ -142,14 +138,18 @@ async def scan_once(app, settings, cmc, sheets):
         symbol = (coin.get("symbol") or "").strip()
         name = (coin.get("name") or "").strip()
 
+        # ===== ULTRA =====
         if cid not in seen and not ultra_seen(state, cid):
-            await safe_send(app, settings.chat_id,
-                f"⚡ <b>ULTRA-EARLY</b>\n\n<b>{name}</b> ({symbol})")
-
+            await safe_send(
+                app,
+                settings.chat_id,
+                f"⚡ <b>ULTRA-EARLY</b>\n\n<b>{name}</b> ({symbol})",
+            )
             mark_seen(state, cid)
             mark_ultra_seen(state, cid)
             save_state(state)
 
+        # ===== TRACK =====
         already_tracked = cid in tracked
         if not already_tracked:
             t = detect_trading(symbol)
@@ -166,21 +166,22 @@ async def scan_once(app, settings, cmc, sheets):
         elif t["bybit_spot"] or t["bybit_linear"]:
             candles_5m = get_bybit_5m(symbol)
 
-        crowd_recent = False
-
+        # ===== CROWD FLOW =====
         try:
-            if candles_5m and crowd_engine_signal(candles_5m):
-                crowd_recent = True
-                state.setdefault("crowd_memory", {})[str(cid)] = _now()
-
-                await safe_send(
-                    app,
-                    settings.chat_id,
-                    f"🟢 <b>CROWD ENGINE</b>\n\n<b>{symbol}</b>",
-                )
+            if funding_crowd_ok(symbol):
+                await safe_send(app, settings.chat_id, f"🟢 <b>CROWD FLOW</b>\n<b>{symbol}</b>")
         except Exception:
             pass
 
+        # ===== CROWD ENGINE =====
+        try:
+            if candles_5m and crowd_engine_signal(candles_5m):
+                state.setdefault("crowd_memory", {})[str(cid)] = _now()
+                await safe_send(app, settings.chat_id, f"🟢 <b>CROWD ENGINE</b>\n<b>{symbol}</b>")
+        except Exception:
+            pass
+
+        # ===== FIRST MOVE =====
         if not confirm_light_sent(state, cid):
             anti_ok = anti_scam_filter(candles_5m)
             liq_growth = liquidity_growth_ok(candles_5m)
@@ -190,9 +191,7 @@ async def scan_once(app, settings, cmc, sheets):
                 fm = first_move_eval(symbol, candles_5m)
 
                 if fm.get("ok") and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN):
-
                     await safe_send(app, settings.chat_id, fm["text"])
-
                     mark_first_move_sent(state, cid, _now())
                     save_state(state)
 
@@ -214,11 +213,12 @@ async def main():
     await app.initialize()
     await app.start()
 
-    state = load_state()
-    if not startup_sent_recent(state, cooldown_sec=STARTUP_GUARD_SEC):
-        await safe_send(app, settings.chat_id, "📡 Listings Radar запущен")
-        mark_startup_sent(state)
-        save_state(state)
+    # 🔥 ВСЕГДА ШЛЁМ ПИНГ ПРИ СТАРТЕ
+    await safe_send(
+        app,
+        settings.chat_id,
+        "✅ Listings Radar ONLINE\n(бот запущен и работает)",
+    )
 
     while True:
         try:
@@ -234,4 +234,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
