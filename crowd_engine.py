@@ -103,3 +103,31 @@ def crowd_engine_signal(candles: List[Dict[str, Any]]) -> bool:
 
     except Exception:
         return False
+def second_wave_detect(candles):
+    """
+    Detect second wave volume expansion.
+    """
+
+    if not candles or len(candles) < 8:
+        return False
+
+    try:
+        volumes = [float(c[5]) for c in candles]
+    except Exception:
+        return False
+
+    v1 = volumes[-4]
+    v2 = volumes[-3]
+    v3 = volumes[-2]
+    v4 = volumes[-1]
+
+    # первая волна
+    first_push = v2 > v1 * 1.6
+
+    # пауза
+    pullback = v3 < v2 * 0.8
+
+    # вторая волна
+    second_push = v4 > v3 * 1.8
+
+    return first_push and pullback and second_push
