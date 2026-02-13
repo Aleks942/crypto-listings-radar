@@ -45,10 +45,6 @@ def crowd_engine_ok(candles: List[Dict[str, Any]]) -> bool:
 # ==================================
 
 def crowd_wave_v2(candles: List[Dict[str, Any]]) -> bool:
-    """
-    Ловит вторую волну объёма:
-    импульс → откат → повторный вход толпы
-    """
 
     if not candles or len(candles) < 20:
         return False
@@ -73,9 +69,6 @@ def crowd_wave_v2(candles: List[Dict[str, Any]]) -> bool:
 # ==================================
 
 def second_wave_detect(candles: List[Dict[str, Any]]) -> bool:
-    """
-    Быстрый детектор второй волны.
-    """
 
     if not candles or len(candles) < 8:
         return False
@@ -98,22 +91,46 @@ def second_wave_detect(candles: List[Dict[str, Any]]) -> bool:
 
 
 # ==================================
-# 🔥 ОБЩИЙ CROWD SIGNAL (MAIN ENTRY)
+# 🧠 SMART SILENCE FILTER
+# ==================================
+
+def smart_silence_filter(candles: List[Dict[str, Any]]) -> bool:
+
+    if not candles or len(candles) < 10:
+        return False
+
+    try:
+        volumes = [float(c[5]) for c in candles]
+    except Exception:
+        return False
+
+    avg = sum(volumes[:-3]) / max(len(volumes[:-3]), 1)
+
+    spike = volumes[-1] > avg * 2
+    continuation = volumes[-2] > avg * 1.2
+
+    return spike and continuation
+
+
+# ==================================
+# 🔥 ОБЩИЙ CROWD SIGNAL (ФИНАЛ)
 # ==================================
 
 def crowd_engine_signal(candles: List[Dict[str, Any]]) -> bool:
     """
-    Общий вход для main.py
+    Финальный сигнал толпы:
 
     PRO + V2 + FAST SECOND WAVE
+    + SMART SILENCE FILTER
     """
 
     try:
         pro_ok = crowd_engine_ok(candles)
         v2_ok = crowd_wave_v2(candles)
         fast_ok = second_wave_detect(candles)
+        silence_ok = smart_silence_filter(candles)
 
-        return pro_ok or v2_ok or fast_ok
+        return (pro_ok or v2_ok or fast_ok) and silence_ok
 
     except Exception:
         return False
