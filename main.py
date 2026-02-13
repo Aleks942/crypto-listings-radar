@@ -36,17 +36,11 @@ from candles_binance import get_candles_5m as get_binance_5m
 from candles_bybit import get_candles_5m as get_bybit_5m
 
 # ================= EDGE LAYERS =================
-from crowd_engine import crowd_engine_ok
+from crowd_engine import crowd_engine_signal
 from liquidity_growth import liquidity_growth_ok
 from liquidity_memory import liquidity_memory_ok
-
-# funding слой: берём crowd-сигнал отсюда
 from funding_flow import funding_crowd_ok
 
-# whale_trap пока не используем в логике, но импорт можно оставить
-# from whale_trap import whale_trap_detect
-
-# 15m candles optional
 try:
     from candles_binance import get_candles_15m as get_binance_15m
 except Exception:
@@ -191,15 +185,14 @@ async def scan_once(app, settings, cmc, sheets):
         else:
             t = detect_trading(symbol)
 
-        # ================= GET 5m candles (one time) =================
+        # ================= GET 5m candles =================
         candles_5m = []
         if t["binance"]:
             candles_5m = get_binance_5m(symbol)
         elif t["bybit_spot"] or t["bybit_linear"]:
             candles_5m = get_bybit_5m(symbol)
 
-        # ================= CROWD FLOW (funding/OI placeholder) =================
-        # отдельный сигнал, не ломает FIRST_MOVE
+        # ================= FUNDING FLOW =================
         try:
             if funding_crowd_ok(symbol):
                 await safe_send(
@@ -217,10 +210,9 @@ async def scan_once(app, settings, cmc, sheets):
         except Exception:
             pass
 
-        # ================= CROWD ENGINE (по свечам/объёму) =================
-        # отдельный сигнал — “толпа вошла, приготовиться”
+        # ================= CROWD ENGINE PRO + V2 =================
         try:
-            if candles_5m and crowd_engine_ok(candles_5m):
+            if candles_5m and crowd_engine_signal(candles_5m):
                 await safe_send(
                     app,
                     settings.chat_id,
@@ -338,3 +330,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
