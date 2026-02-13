@@ -1,3 +1,4 @@
+# (твои импорты остаются как были)
 import asyncio
 import os
 import time
@@ -7,7 +8,6 @@ from telegram.ext import Application
 from config import Settings
 from cmc import CMCClient, age_days
 from sheets import SheetsClient, now_iso_utc
-
 from confirm_entry_client import send_to_confirm_entry
 
 from state import (
@@ -35,14 +35,11 @@ from confirm_light import confirm_light_eval
 from candles_binance import get_candles_5m as get_binance_5m
 from candles_bybit import get_candles_5m as get_bybit_5m
 
-# ================= EDGE LAYERS =================
 from crowd_engine import crowd_engine_signal
 from liquidity_growth import liquidity_growth_ok
 from liquidity_memory import liquidity_memory_ok
 from funding_flow import funding_crowd_ok
 
-# 🧠 DECISION ENGINE
-from decision_engine import decision_engine
 
 try:
     from candles_binance import get_candles_15m as get_binance_15m
@@ -145,102 +142,45 @@ async def scan_once(app, settings, cmc, sheets):
         symbol = (coin.get("symbol") or "").strip()
         name = (coin.get("name") or "").strip()
 
-        # ================= ULTRA =================
         if cid not in seen and not ultra_seen(state, cid):
-            await safe_send(
-                app,
-                settings.chat_id,
-                f"⚡ <b>ULTRA-EARLY</b>\n(Раннее обнаружение листинга)\n\n<b>{name}</b> ({symbol})",
-            )
-
-            sheets.buffer_append({
-                "detected_at": now_iso_utc(),
-                "cmc_id": cid,
-                "symbol": symbol,
-                "status": "ULTRA",
-            })
+            await safe_send(app, settings.chat_id,
+                f"⚡ <b>ULTRA-EARLY</b>\n\n<b>{name}</b> ({symbol})")
 
             mark_seen(state, cid)
             mark_ultra_seen(state, cid)
             save_state(state)
 
-        # ================= TRACK =================
         already_tracked = cid in tracked
         if not already_tracked:
             t = detect_trading(symbol)
             if not t["any"]:
                 continue
-
             mark_tracked(state, cid)
             save_state(state)
-
-            sheets.buffer_append({
-                "detected_at": now_iso_utc(),
-                "cmc_id": cid,
-                "symbol": symbol,
-                "status": "TRACK",
-            })
         else:
             t = detect_trading(symbol)
 
-        # ================= GET 5m candles =================
         candles_5m = []
         if t["binance"]:
             candles_5m = get_binance_5m(symbol)
         elif t["bybit_spot"] or t["bybit_linear"]:
             candles_5m = get_bybit_5m(symbol)
 
-        # ================= FUNDING FLOW =================
-        crowd_flow = False
-        try:
-            crowd_flow = funding_crowd_ok(symbol)
-            if crowd_flow:
-                await safe_send(
-                    app,
-                    settings.chat_id,
-                    f"🟢 <b>CROWD FLOW</b>\n(Толпа вошла — рынок заряжается)\n\n<b>{symbol}</b>",
-                )
-
-                sheets.buffer_append({
-                    "detected_at": now_iso_utc(),
-                    "cmc_id": cid,
-                    "symbol": symbol,
-                    "status": "CROWD_FLOW",
-                })
-        except Exception:
-            pass
-
-        # ================= CROWD ENGINE + MEMORY =================
         crowd_recent = False
+
         try:
             if candles_5m and crowd_engine_signal(candles_5m):
-
                 crowd_recent = True
                 state.setdefault("crowd_memory", {})[str(cid)] = _now()
 
                 await safe_send(
                     app,
                     settings.chat_id,
-                    f"🟢 <b>CROWD ENGINE</b>\n(Толпа начала входить — приготовиться к выстрелу)\n\n<b>{symbol}</b>",
+                    f"🟢 <b>CROWD ENGINE</b>\n\n<b>{symbol}</b>",
                 )
-
-                sheets.buffer_append({
-                    "detected_at": now_iso_utc(),
-                    "cmc_id": cid,
-                    "symbol": symbol,
-                    "status": "CROWD_ENGINE",
-                })
         except Exception:
             pass
 
-        try:
-            crowd_ts = state.get("crowd_memory", {}).get(str(cid))
-            if crowd_ts and _now() - crowd_ts < 1200:
-                crowd_recent = True
-        except Exception:
-            pass
-
-        # ================= FIRST MOVE =================
         if not confirm_light_sent(state, cid):
             anti_ok = anti_scam_filter(candles_5m)
             liq_growth = liquidity_growth_ok(candles_5m)
@@ -249,41 +189,13 @@ async def scan_once(app, settings, cmc, sheets):
             if candles_5m and anti_ok and liq_growth and liq_memory:
                 fm = first_move_eval(symbol, candles_5m)
 
-                decision = decision_engine(
-                    crowd_recent=crowd_recent,
-                    crowd_flow=crowd_flow,
-                    liq_growth=liq_growth,
-                    liq_memory=liq_memory,
-                    first_ok=fm.get("ok"),
-                    anti_scam_ok=anti_ok,
-                )
-
                 if fm.get("ok") and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN):
 
-                    text = fm["text"]
-
-                    if decision.boosted:
-                        text = "🔥 HUNT LEVEL\n" + text
-
-                    text += f"\n\n🧠 SCORE: {decision.score} | LEVEL: {decision.level}"
-
-                    await safe_send(
-                        app,
-                        settings.chat_id,
-                        text,
-                    )
-
-                    sheets.buffer_append({
-                        "detected_at": now_iso_utc(),
-                        "cmc_id": cid,
-                        "symbol": symbol,
-                        "status": "FIRST_MOVE",
-                    })
+                    await safe_send(app, settings.chat_id, fm["text"])
 
                     mark_first_move_sent(state, cid, _now())
                     save_state(state)
 
-    sheets.flush()
     save_state(state)
 
 
@@ -304,11 +216,7 @@ async def main():
 
     state = load_state()
     if not startup_sent_recent(state, cooldown_sec=STARTUP_GUARD_SEC):
-        await safe_send(
-            app,
-            settings.chat_id,
-            "📡 Listings Radar запущен\n(Радар листингов активирован)",
-        )
+        await safe_send(app, settings.chat_id, "📡 Listings Radar запущен")
         mark_startup_sent(state)
         save_state(state)
 
@@ -326,3 +234,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
