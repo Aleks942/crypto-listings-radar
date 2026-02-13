@@ -8,9 +8,6 @@ from typing import List, Dict, Any
 # ==============================
 
 def crowd_engine_ok(candles: List[Dict[str, Any]]) -> bool:
-    """
-    Определяет момент когда толпа начинает входить.
-    """
 
     if not candles or len(candles) < 12:
         return False
@@ -91,6 +88,26 @@ def second_wave_detect(candles: List[Dict[str, Any]]) -> bool:
 
 
 # ==================================
+# 💥 CROWD PRESSURE BUILD (НОВОЕ)
+# ==================================
+
+def crowd_pressure_build(candles: List[Dict[str, Any]]) -> bool:
+    """
+    Проверяет нарастающее давление объёма.
+    """
+
+    if not candles or len(candles) < 6:
+        return False
+
+    try:
+        volumes = [float(c[5]) for c in candles]
+    except Exception:
+        return False
+
+    return volumes[-1] > volumes[-2] > volumes[-3]
+
+
+# ==================================
 # 🧠 SMART SILENCE FILTER
 # ==================================
 
@@ -113,14 +130,17 @@ def smart_silence_filter(candles: List[Dict[str, Any]]) -> bool:
 
 
 # ==================================
-# 🔥 ОБЩИЙ CROWD SIGNAL (ФИНАЛ)
+# 🔥 ОБЩИЙ CROWD SIGNAL (FINAL PRO)
 # ==================================
 
 def crowd_engine_signal(candles: List[Dict[str, Any]]) -> bool:
     """
     Финальный сигнал толпы:
 
-    PRO + V2 + FAST SECOND WAVE
+    PRO
+    V2
+    FAST SECOND WAVE
+    PRESSURE BUILD
     + SMART SILENCE FILTER
     """
 
@@ -128,9 +148,11 @@ def crowd_engine_signal(candles: List[Dict[str, Any]]) -> bool:
         pro_ok = crowd_engine_ok(candles)
         v2_ok = crowd_wave_v2(candles)
         fast_ok = second_wave_detect(candles)
+        pressure_ok = crowd_pressure_build(candles)
         silence_ok = smart_silence_filter(candles)
 
-        return (pro_ok or v2_ok or fast_ok) and silence_ok
+        return (pro_ok or v2_ok or fast_ok or pressure_ok) and silence_ok
 
     except Exception:
         return False
+
