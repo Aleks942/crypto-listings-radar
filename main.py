@@ -215,6 +215,21 @@ async def scan_once(app, settings, cmc, sheets):
                 })
         except Exception:
             pass
+# ================= CROWD ENGINE =================
+if candles_5m and crowd_engine_ok(candles_5m):
+
+    await safe_send(
+        app,
+        settings.chat_id,
+        f"🟢 <b>CROWD ENGINE</b>\n(Толпа начала входить — возможен выстрел)\n\n<b>{symbol}</b>",
+    )
+
+    sheets.buffer_append({
+        "detected_at": now_iso_utc(),
+        "cmc_id": cid,
+        "symbol": symbol,
+        "status": "CROWD_ENGINE",
+    })
 
         # ================= FIRST MOVE =================
         if not confirm_light_sent(state, cid):
