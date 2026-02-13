@@ -36,17 +36,13 @@ from candles_binance import get_candles_5m as get_binance_5m
 from candles_bybit import get_candles_5m as get_bybit_5m
 
 # ================= EDGE LAYERS =================
-from crowd_engine import crowd_engine_signal
+# 🔥 ДОБАВИЛ explain — ничего больше не менял
+from crowd_engine import crowd_engine_signal, crowd_engine_explain
 from liquidity_growth import liquidity_growth_ok
 from liquidity_memory import liquidity_memory_ok
 
-# funding слой (может быть заглушкой внутри funding_flow.py)
 from funding_flow import funding_crowd_ok
 
-# whale_trap пока не используем в логике, но импорт можно оставить
-# from whale_trap import whale_trap_detect
-
-# 15m candles optional
 try:
     from candles_binance import get_candles_15m as get_binance_15m
 except Exception:
@@ -67,7 +63,6 @@ ANTI_SCAM_MIN_CANDLES = int(os.getenv("ANTI_SCAM_MIN_CANDLES", "25"))
 ANTI_SCAM_MAX_RANGE = float(os.getenv("ANTI_SCAM_MAX_RANGE", "2.5"))
 ANTI_SCAM_VOL_DROP_K = float(os.getenv("ANTI_SCAM_VOL_DROP_K", "0.7"))
 
-# сколько минут помнить толпу (по умолчанию 20 минут)
 CROWD_MEMORY_SEC = int(os.getenv("CROWD_MEMORY_SEC", "1200"))
 
 
@@ -194,15 +189,14 @@ async def scan_once(app, settings, cmc, sheets):
         else:
             t = detect_trading(symbol)
 
-        # ================= GET 5m candles (one time) =================
+        # ================= GET 5m candles =================
         candles_5m = []
         if t["binance"]:
             candles_5m = get_binance_5m(symbol)
         elif t["bybit_spot"] or t["bybit_linear"]:
             candles_5m = get_bybit_5m(symbol)
 
-        # ================= CROWD FLOW (funding/OI placeholder) =================
-        # отдельный сигнал, не ломает FIRST_MOVE
+        # ================= CROWD FLOW =================
         try:
             if funding_crowd_ok(symbol):
                 await safe_send(
@@ -220,7 +214,7 @@ async def scan_once(app, settings, cmc, sheets):
         except Exception:
             pass
 
-        # ================= CROWD ENGINE + MOMENTUM MEMORY =================
+        # ================= CROWD ENGINE + EXPLAIN =================
         crowd_recent = False
 
         try:
@@ -228,10 +222,12 @@ async def scan_once(app, settings, cmc, sheets):
                 crowd_recent = True
                 state.setdefault("crowd_memory", {})[str(cid)] = _now()
 
+                explain = crowd_engine_explain(candles_5m)
+
                 await safe_send(
                     app,
                     settings.chat_id,
-                    f"🟢 <b>CROWD ENGINE</b>\n(Толпа начала входить — приготовиться к выстрелу)\n\n<b>{symbol}</b>",
+                    f"🟢 <b>CROWD ENGINE</b>\n\n{explain}\n\n<b>{symbol}</b>",
                 )
 
                 sheets.buffer_append({
@@ -243,7 +239,6 @@ async def scan_once(app, settings, cmc, sheets):
         except Exception:
             pass
 
-        # память толпы (например 20 минут)
         try:
             crowd_ts = state.get("crowd_memory", {}).get(str(cid))
             if crowd_ts and _now() - crowd_ts < CROWD_MEMORY_SEC:
@@ -263,7 +258,6 @@ async def scan_once(app, settings, cmc, sheets):
 
                 if fm.get("ok") and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN):
 
-                    # 🔥 CROWD BOOST (если толпа была недавно)
                     if crowd_recent:
                         fm["text"] = "🔥 CROWD BOOSTED\n" + fm["text"]
 
@@ -334,14 +328,12 @@ async def main():
     await app.initialize()
     await app.start()
 
-    # ✅ Всегда пингуем при старте контейнера (чтобы ты видел, что бот жив)
     await safe_send(
         app,
         settings.chat_id,
         "✅ Listings Radar ONLINE\n(бот запущен и работает)",
     )
 
-    # guard можно оставить как метку (не мешает)
     state = load_state()
     if not startup_sent_recent(state, cooldown_sec=STARTUP_GUARD_SEC):
         mark_startup_sent(state)
