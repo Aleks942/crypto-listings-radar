@@ -1,5 +1,4 @@
-def funding_crowd_ok(symbol: str) -> bool:
-    """
+
     PRO слой: сигнал толпы.
     Пока это безопасная заглушка,
     чтобы бот не падал.
@@ -7,3 +6,11 @@ def funding_crowd_ok(symbol: str) -> bool:
 
     # позже подключим реальные данные funding / OI
     return False
+# ==========================================
+# SAFE STUBS — чтобы бот не падал
+# ==========================================
+
+def funding_flow_ok(symbol: str) -> bool:
+    """
+    Заглушка старого слоя.
+    FIRST_MOVE
