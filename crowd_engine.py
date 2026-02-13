@@ -3,6 +3,10 @@
 from typing import List, Dict, Any
 
 
+# ==============================
+# 🧠 CROWD ENGINE PRO (текущий)
+# ==============================
+
 def crowd_engine_ok(candles: List[Dict[str, Any]]) -> bool:
     """
     PRO CROWD ENGINE
@@ -44,3 +48,58 @@ def crowd_engine_ok(candles: List[Dict[str, Any]]) -> bool:
     pullback_ok = (closes[-1] - lows[-1]) > (last_range * 0.5)
 
     return volume_break and range_expand and bullish_flow and pullback_ok
+
+
+# ==================================
+# 🚀 CROWD ENGINE V2 — ВТОРАЯ ВОЛНА
+# ==================================
+
+def crowd_wave_v2(candles: List[Dict[str, Any]]) -> bool:
+    """
+    Ловит вторую волну объёма:
+    импульс → откат → повторный вход толпы
+    """
+
+    if not candles or len(candles) < 20:
+        return False
+
+    try:
+        volumes = [float(c[5]) for c in candles]
+        closes = [float(c[4]) for c in candles]
+    except Exception:
+        return False
+
+    avg_vol = sum(volumes[:-5]) / max(len(volumes[:-5]), 1)
+
+    # первый всплеск
+    first_spike = max(volumes[-15:-10]) > avg_vol * 2
+
+    # небольшой откат цены
+    pullback = closes[-7] < closes[-10]
+
+    # вторая волна объёма
+    second_spike = volumes[-1] > avg_vol * 1.8
+
+    return first_spike and pullback and second_spike
+
+
+# ==================================
+# 🔥 ОБЩИЙ ВХОД ДЛЯ MAIN.PY
+# ==================================
+
+def crowd_engine_signal(candles: List[Dict[str, Any]]) -> bool:
+    """
+    Общая точка входа.
+
+    Старый PRO + новый V2.
+    Ничего в main.py менять почти не нужно.
+    """
+
+    try:
+        pro_ok = crowd_engine_ok(candles)
+        v2_ok = crowd_wave_v2(candles)
+
+        return pro_ok or v2_ok
+
+    except Exception:
+        return False
