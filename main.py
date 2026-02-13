@@ -36,6 +36,8 @@ from candles_binance import get_candles_5m as get_binance_5m
 from candles_bybit import get_candles_5m as get_bybit_5m
 
 # ================= EDGE LAYERS =================
+from crowd_engine import crowd_engine_ok
+
 from liquidity_growth import liquidity_growth_ok
 from liquidity_memory import liquidity_memory_ok
 from funding_flow import funding_flow_ok as funding_crowd_ok
