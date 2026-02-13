@@ -4,7 +4,7 @@ from typing import List, Dict, Any
 
 
 # ==============================
-# 🧠 CROWD ENGINE PRO (основа)
+# 🧠 CROWD ENGINE PRO
 # ==============================
 
 def crowd_engine_ok(candles: List[Dict[str, Any]]) -> bool:
@@ -29,16 +29,14 @@ def crowd_engine_ok(candles: List[Dict[str, Any]]) -> bool:
     prev_range = highs[-2] - lows[-2]
 
     range_expand = last_range > prev_range * 1.3
-
     bullish_flow = closes[-1] >= closes[-2] >= closes[-3]
-
     pullback_ok = (closes[-1] - lows[-1]) > (last_range * 0.5)
 
     return volume_break and range_expand and bullish_flow and pullback_ok
 
 
 # ==================================
-# 🚀 CROWD ENGINE V2 — ВТОРАЯ ВОЛНА
+# 🚀 CROWD WAVE V2
 # ==================================
 
 def crowd_wave_v2(candles: List[Dict[str, Any]]) -> bool:
@@ -62,7 +60,7 @@ def crowd_wave_v2(candles: List[Dict[str, Any]]) -> bool:
 
 
 # ==================================
-# ⚡ FAST SECOND WAVE — МГНОВЕННАЯ
+# ⚡ FAST SECOND WAVE
 # ==================================
 
 def second_wave_detect(candles: List[Dict[str, Any]]) -> bool:
@@ -75,20 +73,13 @@ def second_wave_detect(candles: List[Dict[str, Any]]) -> bool:
     except Exception:
         return False
 
-    v1 = volumes[-4]
-    v2 = volumes[-3]
-    v3 = volumes[-2]
-    v4 = volumes[-1]
+    v1, v2, v3, v4 = volumes[-4], volumes[-3], volumes[-2], volumes[-1]
 
-    first_push = v2 > v1 * 1.6
-    pullback = v3 < v2 * 0.8
-    second_push = v4 > v3 * 1.8
-
-    return first_push and pullback and second_push
+    return v2 > v1 * 1.6 and v3 < v2 * 0.8 and v4 > v3 * 1.8
 
 
 # ==================================
-# 💥 CROWD PRESSURE BUILD
+# 💥 PRESSURE BUILD
 # ==================================
 
 def crowd_pressure_build(candles: List[Dict[str, Any]]) -> bool:
@@ -105,7 +96,7 @@ def crowd_pressure_build(candles: List[Dict[str, Any]]) -> bool:
 
 
 # ==================================
-# ⚡ EARLY MOMENTUM SHIFT
+# ⚡ EARLY MOMENTUM
 # ==================================
 
 def early_momentum_shift(candles: List[Dict[str, Any]]) -> bool:
@@ -119,14 +110,33 @@ def early_momentum_shift(candles: List[Dict[str, Any]]) -> bool:
     except Exception:
         return False
 
-    higher_highs = highs[-1] > highs[-2] > highs[-3]
-    rising_volume = volumes[-1] > volumes[-2]
-
-    return higher_highs and rising_volume
+    return highs[-1] > highs[-2] > highs[-3] and volumes[-1] > volumes[-2]
 
 
 # ==================================
-# 🧠 SMART SILENCE FILTER
+# 🧨 LIQUIDITY COMPRESSION
+# ==================================
+
+def liquidity_compression(candles: List[Dict[str, Any]]) -> bool:
+
+    if not candles or len(candles) < 6:
+        return False
+
+    try:
+        highs = [float(c[2]) for c in candles]
+        lows = [float(c[3]) for c in candles]
+    except Exception:
+        return False
+
+    r1 = highs[-3] - lows[-3]
+    r2 = highs[-2] - lows[-2]
+    r3 = highs[-1] - lows[-1]
+
+    return r3 < r2 < r1
+
+
+# ==================================
+# 🔇 SMART SILENCE FILTER
 # ==================================
 
 def smart_silence_filter(candles: List[Dict[str, Any]]) -> bool:
@@ -141,14 +151,11 @@ def smart_silence_filter(candles: List[Dict[str, Any]]) -> bool:
 
     avg = sum(volumes[:-3]) / max(len(volumes[:-3]), 1)
 
-    spike = volumes[-1] > avg * 2
-    continuation = volumes[-2] > avg * 1.2
-
-    return spike and continuation
+    return volumes[-1] > avg * 2 and volumes[-2] > avg * 1.2
 
 
 # ==================================
-# 🧠 CROWD CONFIDENCE SCORE
+# 🧠 CONFIDENCE SCORE
 # ==================================
 
 def crowd_confidence_score(candles: List[Dict[str, Any]]) -> int:
@@ -165,26 +172,52 @@ def crowd_confidence_score(candles: List[Dict[str, Any]]) -> int:
         score += 1
     if early_momentum_shift(candles):
         score += 1
+    if liquidity_compression(candles):
+        score += 1
 
     return score
 
 
 # ==================================
-# 🔥 ОБЩИЙ CROWD SIGNAL — FINAL ELITE
+# 🧾 ОБЪЯСНЕНИЕ СИГНАЛА (РУССКИЙ)
+# ==================================
+
+def crowd_engine_explain(candles: List[Dict[str, Any]]) -> str:
+
+    reasons = []
+
+    if crowd_engine_ok(candles):
+        reasons.append("🧠 Толпа начала активно входить (объём + ускорение)")
+    if crowd_wave_v2(candles):
+        reasons.append("🚀 Обнаружена вторая волна входа")
+    if second_wave_detect(candles):
+        reasons.append("⚡ Быстрая вторая волна объёма")
+    if crowd_pressure_build(candles):
+        reasons.append("💥 Объём растёт каждую свечу — давление покупателей")
+    if early_momentum_shift(candles):
+        reasons.append("⚡ Раннее ускорение рынка")
+    if liquidity_compression(candles):
+        reasons.append("🧨 Сжатие диапазона — возможный выстрел")
+
+    if not reasons:
+        return "Толпа пока не подтверждена"
+
+    return "\n".join(reasons)
+
+
+# ==================================
+# 🔥 FINAL SIGNAL
 # ==================================
 
 def crowd_engine_signal(candles: List[Dict[str, Any]]) -> bool:
 
     try:
-        silence_ok = smart_silence_filter(candles)
-        if not silence_ok:
+        if not smart_silence_filter(candles):
             return False
 
         score = crowd_confidence_score(candles)
 
-        # хотя бы один слой активен
         return score >= 1
 
     except Exception:
         return False
-
