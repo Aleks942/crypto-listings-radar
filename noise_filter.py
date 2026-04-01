@@ -1,6 +1,7 @@
 import os
 import re
 from typing import Dict, Any, Tuple
+from config import Settings
 
 
 # 0 = не трекать UNVERIFIED (по умолчанию)
