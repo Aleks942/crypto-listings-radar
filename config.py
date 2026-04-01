@@ -63,4 +63,5 @@ class Settings:
             limit=_opt_int("CMC_LIMIT", 200),
             max_age_days=_opt_int("MAX_AGE_DAYS", 14),
             min_volume_usd=_opt_float("MIN_VOLUME_USD", 200000.0),
+            clean_mode=os.getenv("CLEAN_MODE", "0") == "1",
         )
