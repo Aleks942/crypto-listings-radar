@@ -153,31 +153,31 @@ async def scan_once(app, settings, cmc, sheets):
         name = (coin.get("name") or "").strip()
 
         # ================= ULTRA =================
-if cid not in seen and not ultra_seen(state, cid):
+        if cid not in seen and not ultra_seen(state, cid):
 
-    # CLEAN FILTER
-    allowed, reason = is_clean_token(item, settings)
+            # CLEAN FILTER
+            allowed, reason = is_clean_token(coin, settings)
 
-    if not allowed:
-        continue  # пропускаем мусор и идём дальше
+            if not allowed:
+                continue  # пропускаем мусор
 
-    await safe_send(
-        app,
-        settings.chat_id,
-        f"🟢 <b>CLEAN LISTING</b>\n\n<b>{name}</b> ({symbol})",
-        parse_mode=ParseMode.HTML,
-    )
+            await safe_send(
+                app,
+                settings.chat_id,
+                f"🟢 <b>CLEAN LISTING</b>\n\n<b>{name}</b> ({symbol})",
+                parse_mode=ParseMode.HTML,
+            )
 
-    sheets.buffer_append({
-        "detected_at": now_iso_utc(),
-        "cmc_id": cid,
-        "symbol": symbol,
-        "status": "ULTRA",
-    })
+            sheets.buffer_append({
+                "detected_at": now_iso_utc(),
+                "cmc_id": cid,
+                "symbol": symbol,
+                "status": "ULTRA",
+            })
 
-    mark_seen(state, cid)
-    mark_ultra_seen(state, cid)
-    save_state(state)
+            mark_seen(state, cid)
+            mark_ultra_seen(state, cid)
+            save_state(state)
 
         # ================= TRACK =================
         already_tracked = cid in tracked
