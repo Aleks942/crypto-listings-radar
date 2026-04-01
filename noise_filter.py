@@ -61,3 +61,48 @@ def is_unverified_token(token: Dict[str, Any]) -> Tuple[bool, str]:
         return True, "Слишком длинный symbol"
 
     return False, "OK"
+
+def is_clean_token(token: Dict[str, Any], settings: Settings) -> Tuple[bool, str]:
+    """
+    Возвращает (allowed, reason)
+    allowed = True → можно отправлять
+    """
+
+    if not settings.clean_mode:
+        return True, "CLEAN_MODE OFF"
+
+    name = _s(token.get("name")).lower()
+    symbol = _s(token.get("symbol")).upper()
+
+    mcap = float(token.get("market_cap") or 0)
+    vol = float(token.get("volume_24h") or 0)
+    verified = bool(token.get("is_verified"))
+
+    # 1️⃣ минимальный market cap
+    if mcap < 10_000_000:
+        return False, "Market Cap ниже 10M"
+
+    # 2️⃣ минимальный объём
+    if vol < 3_000_000:
+        return False, "Объём ниже 3M"
+
+    # 3️⃣ мем-слова
+    banned_words = [
+        "inu", "dog", "pepe", "moon",
+        "pump", "meme", "coin", "100x",
+        "presale", "gem"
+    ]
+
+    for word in banned_words:
+        if word in name:
+            return False, f"Мем-слово: {word}"
+
+    # 4️⃣ китайские символы
+    if re.search(r'[\u4e00-\u9fff]', name):
+        return False, "Китайские символы"
+
+    # 5️⃣ обязательная verified метка
+    if not verified:
+        return False, "Не verified"
+
+    return True, "CLEAN OK"
