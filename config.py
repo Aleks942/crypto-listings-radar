@@ -39,6 +39,8 @@ class Settings:
     limit: int
     max_age_days: int
     min_volume_usd: float
+    clean_mode: bool
+    
 
     @staticmethod
     def load() -> "Settings":
