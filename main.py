@@ -194,6 +194,12 @@ async def scan_once(app, settings, cmc, sheets):
             # ================= TRACK =================
             already_tracked = cid in tracked
 
+            await safe_send(
+                app,
+                settings.chat_id,
+                f"🧠 STATE: {symbol}\nseen={cid in seen} | tracked={already_tracked} | ultra={ultra_seen(state, cid)}"
+            )
+
             if not already_tracked:
 
                 await safe_send(
