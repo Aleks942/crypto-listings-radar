@@ -180,6 +180,11 @@ async def scan_once(app, settings, cmc, sheets):
                 continue
 
             passed_count += 1
+            await safe_send(
+                app,
+                settings.chat_id,
+                f"🪙 PASS: {symbol}"
+            )
 
             # ================= ULTRA =================
             if cid not in seen and not ultra_seen(state, cid):
