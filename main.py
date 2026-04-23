@@ -137,6 +137,7 @@ async def scan_once(app, settings, cmc, sheets):
     tracked = tracked_ids(state)
 
     coins = cmc.fetch_recent_listings(limit=settings.limit)
+
     passed_count = 0
     tracked_count = 0
     signal_count = 0
@@ -156,7 +157,7 @@ async def scan_once(app, settings, cmc, sheets):
             usd = (coin.get("quote") or {}).get("USD") or {}
             vol = float(usd.get("volume_24h") or 0)
             age = age_days(coin.get("date_added"))
-            
+
             symbol = (coin.get("symbol") or "").strip()
             name = (coin.get("name") or "").strip()
             text_check = f"{symbol} {name}".lower()
@@ -167,18 +168,17 @@ async def scan_once(app, settings, cmc, sheets):
                 "wrapped", "bridged",
                 "stock", "shares", "ondo"
             ]
-            
+
             if any(word in text_check for word in bad_words):
                 continue
-            
-            
+
             if age is not None and age > settings.max_age_days:
                 continue
-            
+
             if vol < settings.min_volume_usd:
                 continue
-            
-            
+
+            passed_count += 1
 
             # ================= ULTRA =================
             if cid not in seen and not ultra_seen(state, cid):
@@ -205,9 +205,7 @@ async def scan_once(app, settings, cmc, sheets):
                 mark_ultra_seen(state, cid)
                 save_state(state)
 
-               
-    
-           # ================= TRACK =================
+            # ================= TRACK =================
             already_tracked = cid in tracked
 
             if not already_tracked:
@@ -215,6 +213,8 @@ async def scan_once(app, settings, cmc, sheets):
 
                 if not t["any"]:
                     continue
+
+                tracked_count += 1
 
                 mark_tracked(state, cid)
                 save_state(state)
@@ -225,9 +225,10 @@ async def scan_once(app, settings, cmc, sheets):
                     "symbol": symbol,
                     "status": "TRACK",
                 })
-
             else:
                 t = detect_trading(symbol)
+                if t["any"]:
+                    tracked_count += 1
 
             # ================= GET 5m candles =================
             candles_5m = []
@@ -298,7 +299,6 @@ async def scan_once(app, settings, cmc, sheets):
                     fm = first_move_eval(symbol, candles_5m)
 
                     if fm.get("ok") and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN):
-
                         if crowd_recent:
                             fm["text"] = "🔥 CROWD BOOSTED\n" + fm["text"]
 
@@ -307,6 +307,8 @@ async def scan_once(app, settings, cmc, sheets):
                             settings.chat_id,
                             fm["text"] + "\n\n<b>Действие:</b> импульс начался → следи за входом по плану (Entry/Stop).",
                         )
+
+                        signal_count += 1
 
                         sheets.buffer_append({
                             "detected_at": now_iso_utc(),
@@ -317,6 +319,60 @@ async def scan_once(app, settings, cmc, sheets):
 
                         mark_first_move_sent(state, cid, _now())
                         save_state(state)
+
+            # ================= CONFIRM LIGHT =================
+            candles_15m = []
+
+            if t["binance"] and get_binance_15m:
+                candles_15m = get_binance_15m(symbol)
+            elif (t["bybit_spot"] or t["bybit_linear"]) and get_bybit_15m:
+                candles_15m = get_bybit_15m(symbol)
+
+            if candles_15m:
+                cl = confirm_light_eval(symbol, candles_15m)
+
+                if cl.get("ok") and confirm_light_cooldown_ok(state, cid, CONFIRM_COOLDOWN):
+                    exchange = "BINANCE" if t["binance"] else "BYBIT"
+
+                    signal_count += 1
+
+                    mark_confirm_light_sent(state, cid, _now())
+                    save_state(state)
+
+                    sheets.buffer_append({
+                        "detected_at": now_iso_utc(),
+                        "cmc_id": cid,
+                        "symbol": symbol,
+                        "status": "CONFIRM_LIGHT",
+                    })
+
+                    send_to_confirm_entry(
+                        symbol=symbol,
+                        exchange=exchange,
+                        tf="15m",
+                        candles=candles_15m,
+                        mode_hint="CONFIRM_LIGHT",
+                    )
+
+        except Exception as e:
+            try:
+                await safe_send(
+                    app,
+                    settings.chat_id,
+                    f"⚠️ COIN ERROR: {coin.get('symbol', 'UNKNOWN')}\n<pre>{str(e)[:1000]}</pre>",
+                    parse_mode=ParseMode.HTML
+                )
+            except Exception:
+                pass
+
+    await safe_send(
+        app,
+        settings.chat_id,
+        f"📊 SCAN REPORT\nCoins={len(coins)} | Passed={passed_count} | Tracked={tracked_count} | Signals={signal_count}"
+    )
+
+    sheets.flush()
+    save_state(state)
 
             # ================= CONFIRM LIGHT =================
             candles_15m = []
