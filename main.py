@@ -160,11 +160,7 @@ async def scan_once(app, settings, cmc, sheets):
             if age is None or age > settings.max_age_days or vol < settings.min_volume_usd:
                 continue
             
-            await safe_send(
-                app,
-                settings.chat_id,
-                f"✅ FILTER PASS: {symbol}\nAge={age}d | Vol=${int(vol)}"
-            )
+            
 
             # ================= ULTRA =================
             if cid not in seen and not ultra_seen(state, cid):
