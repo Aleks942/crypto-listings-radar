@@ -236,20 +236,17 @@ async def scan_once(app, settings, cmc, sheets):
                 mark_ultra_seen(state, cid)
                 save_state(state)
 
-            # ================= TRACK =================
-            already_tracked = False
+                       # ================= TRACK =================
+            already_tracked = cid in tracked
 
             if not already_tracked:
                 t = detect_trading(symbol)
-
-             
-               
 
                 if not t["any"]:
                     await safe_send(
                         app,
                         settings.chat_id,
-                        f"🟡 EARLY LISTING\n{symbol}\nНет биржи из списка"
+                        f"🟡 EARLY LISTING\n{symbol}\nПока нет CEX-торговли\nВозможен DEX / pre-market stage"
                     )
                     continue
 
