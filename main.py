@@ -236,7 +236,7 @@ async def scan_once(app, settings, cmc, sheets):
                 save_state(state)
 
             # ================= TRACK =================
-            already_tracked = cid in tracked
+            already_tracked = False
 
             if not already_tracked:
                 t = detect_trading(symbol)
