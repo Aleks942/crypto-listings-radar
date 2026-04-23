@@ -37,12 +37,9 @@ from confirm_light import confirm_light_eval
 from candles_binance import get_candles_5m as get_binance_5m
 from candles_bybit import get_candles_5m as get_bybit_5m
 
-# ================= EDGE LAYERS =================
-# 🔥 ДОБАВИЛ explain — ничего больше не менял
 from crowd_engine import crowd_engine_signal, crowd_engine_explain
 from liquidity_growth import liquidity_growth_ok
 from liquidity_memory import liquidity_memory_ok
-
 from funding_flow import funding_crowd_ok
 
 try:
@@ -77,7 +74,11 @@ async def safe_send(app, chat_id, text, parse_mode=ParseMode.HTML, retries=3):
     last_err = None
     for _ in range(retries):
         try:
-            return await app.bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
+            return await app.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode=parse_mode,
+            )
         except Exception as e:
             last_err = e
             await asyncio.sleep(1.5)
@@ -374,59 +375,6 @@ async def scan_once(app, settings, cmc, sheets):
     sheets.flush()
     save_state(state)
 
-            # ================= CONFIRM LIGHT =================
-            candles_15m = []
-
-            if t["binance"] and get_binance_15m:
-                candles_15m = get_binance_15m(symbol)
-            elif (t["bybit_spot"] or t["bybit_linear"]) and get_bybit_15m:
-                candles_15m = get_bybit_15m(symbol)
-
-            if candles_15m:
-                cl = confirm_light_eval(symbol, candles_15m)
-
-                if cl.get("ok") and confirm_light_cooldown_ok(state, cid, CONFIRM_COOLDOWN):
-                    exchange = "BINANCE" if t["binance"] else "BYBIT"
-
-                    mark_confirm_light_sent(state, cid, _now())
-                    save_state(state)
-
-                    sheets.buffer_append({
-                        "detected_at": now_iso_utc(),
-                        "cmc_id": cid,
-                        "symbol": symbol,
-                        "status": "CONFIRM_LIGHT",
-                    })
-
-                    send_to_confirm_entry(
-                        symbol=symbol,
-                        exchange=exchange,
-                        tf="15m",
-                        candles=candles_15m,
-                        mode_hint="CONFIRM_LIGHT",
-                    )
-
-        except Exception as e:
-            try:
-                await safe_send(
-                    app,
-                    settings.chat_id,
-                    f"⚠️ COIN ERROR: {coin.get('symbol', 'UNKNOWN')}\n<pre>{str(e)[:1000]}</pre>",
-                    parse_mode=ParseMode.HTML
-                )
-            except Exception:
-                pass
-
-    await safe_send(
-        app,
-        settings.chat_id,
-        f"📊 SCAN REPORT\nCoins={len(coins)} | Passed={passed_count} | Tracked={tracked_count} | Signals={signal_count}"
-    )
-    
-    sheets.flush()
-    save_state(state)
-                
-
 
 # ================= MAIN =================
 async def main():
@@ -468,11 +416,12 @@ async def main():
     if not startup_sent_recent(state, cooldown_sec=STARTUP_GUARD_SEC):
         mark_startup_sent(state)
         save_state(state)
+
     while True:
         try:
             await scan_once(app, settings, cmc, sheets)
 
-        except Exception as e:
+        except Exception:
             err = traceback.format_exc()[:3500]
 
             try:
@@ -490,5 +439,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-   
