@@ -375,6 +375,17 @@ async def scan_once(app, settings, cmc, sheets):
 # ================= MAIN =================
 async def main():
     settings = Settings.load()
+        print("SETTINGS:",
+          settings.max_age_days,
+          settings.min_volume_usd,
+          settings.limit,
+          flush=True)
+
+    await safe_send(
+        app,
+        settings.chat_id,
+        f"⚙️ SETTINGS\nAGE={settings.max_age_days}\nVOL={settings.min_volume_usd}\nLIMIT={settings.limit}"
+    )
 
     app = Application.builder().token(settings.bot_token).build()
     cmc = CMCClient(settings.cmc_api_key)
