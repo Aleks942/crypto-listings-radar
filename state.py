@@ -209,6 +209,13 @@ def mark_ultra_seen(state: Dict[str, Any], cid: int) -> None:
     lock[str(int(cid))] = float(time.time())
     state["ultra_lock"] = lock
 
+def early_sent(state, cid):
+    return str(cid) in state.get("early_sent", {})
+
+
+def mark_early_sent(state, cid, ts):
+    state.setdefault("early_sent", {})[str(cid)] = ts
+
 
 # -------------------------
 # FIRST MOVE cooldown / sent
