@@ -73,38 +73,34 @@ def is_clean_token(token: Dict[str, Any], settings: Settings) -> Tuple[bool, str
         return True, "CLEAN_MODE OFF"
 
     name = _s(token.get("name")).lower()
-    symbol = _s(token.get("symbol")).upper()
 
-    mcap = float(token.get("market_cap") or 0)
-    vol = float(token.get("volume_24h") or 0)
+    # Правильное чтение данных CMC
+    usd = (token.get("quote") or {}).get("USD") or {}
+
+    mcap = float(usd.get("market_cap") or 0)
+    vol = float(usd.get("volume_24h") or 0)
     verified = bool(token.get("is_verified"))
 
-    # 1️⃣ Market Cap (смягчён)
+    # 1. Минимальный cap
     if mcap > 0 and mcap < 300000:
         return False, "Market Cap ниже 300K"
 
-    # 2️⃣ Объём (смягчён)
+    # 2. Минимальный объём
     if vol < 100000:
         return False, "Объём ниже 100K"
 
-    # 3️⃣ Явный мусор
-    banned_words = [
-        "presale",
-        "1000x",
-        "airdrop scam",
-    ]
+    # 3. Явный мусор
+    banned_words = ["presale", "1000x", "airdrop scam"]
 
     for word in banned_words:
         if word in name:
             return False, f"Подозрительное слово: {word}"
 
-    # 4️⃣ Китайские символы (оставим)
+    # 4. Китайские символы
     if re.search(r'[\u4e00-\u9fff]', name):
         return False, "Китайские символы"
 
-    # 5️⃣ verified больше НЕ обязателен
-    # просто пометка, не бан
-
+    # 5. Unverified разрешён
     if not verified:
         return True, "EARLY OK (unverified)"
 
