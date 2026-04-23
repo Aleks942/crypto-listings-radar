@@ -204,21 +204,13 @@ async def scan_once(app, settings, cmc, sheets):
                 continue
 
             passed_count += 1
-            await safe_send(
-                app,
-                settings.chat_id,
-                f"🪙 PASS: {symbol}"
-            )
+            
 
             # ================= ULTRA =================
             if cid not in seen and not ultra_seen(state, cid):
                 allowed, reason = is_clean_token(coin, settings)
             
-                await safe_send(
-                    app,
-                    settings.chat_id,
-                    f"🧪 CLEAN CHECK {symbol}\nallowed={allowed}\nreason={reason}"
-                )
+               
             
                 if not allowed:
                     continue
@@ -250,12 +242,7 @@ async def scan_once(app, settings, cmc, sheets):
             if not already_tracked:
                 t = detect_trading(symbol)
 
-                await safe_send(
-                    app,
-                    settings.chat_id,
-                    f"🔎 {symbol}\nBIN={t['binance']} | BYB={t['bybit_spot']} | FUT={t['bybit_linear']} | MEXC={t['mexc']} | GATE={t['gate']} | BITGET={t['bitget']} | KUCOIN={t['kucoin']}"
-                )
-
+             
                 break
 
                 if not t["any"]:
