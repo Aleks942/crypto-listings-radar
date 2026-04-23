@@ -40,7 +40,8 @@ def is_unverified_token(token: Dict[str, Any]) -> Tuple[bool, str]:
     slug = _s(token.get("slug")).lower()
 
     mcap = float(token.get("market_cap") or 0)
-    vol = float(token.get("volume_24h") or 0)
+    usd = (token.get("quote") or {}).get("USD") or {}
+    vol = float(usd.get("volume_24h") or 0)
 
     # 1) Реальные признаки домена/URL в name/slug (не просто точка)
     if _looks_like_domain(name):
