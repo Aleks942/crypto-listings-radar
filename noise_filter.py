@@ -64,8 +64,7 @@ def is_unverified_token(token: Dict[str, Any]) -> Tuple[bool, str]:
 
 def is_clean_token(token: Dict[str, Any], settings: Settings) -> Tuple[bool, str]:
     """
-    Возвращает (allowed, reason)
-    allowed = True → можно отправлять
+    allowed = True -> можно отправлять
     """
 
     if not settings.clean_mode:
@@ -78,31 +77,33 @@ def is_clean_token(token: Dict[str, Any], settings: Settings) -> Tuple[bool, str
     vol = float(token.get("volume_24h") or 0)
     verified = bool(token.get("is_verified"))
 
-    # 1️⃣ минимальный market cap
-    if mcap < 1000000:
-        return False, "Market Cap ниже 10M"
+    # 1️⃣ Market Cap (смягчён)
+    if mcap > 0 and mcap < 300000:
+        return False, "Market Cap ниже 300K"
 
-    # 2️⃣ минимальный объём
-    if vol < 3_000_000:
-        return False, "Объём ниже 3M"
+    # 2️⃣ Объём (смягчён)
+    if vol < 100000:
+        return False, "Объём ниже 100K"
 
-    # 3️⃣ мем-слова
+    # 3️⃣ Явный мусор
     banned_words = [
-        "inu", "dog", "pepe", "moon",
-        "pump", "meme", "coin", "100x",
-        "presale", "gem"
+        "presale",
+        "1000x",
+        "airdrop scam",
     ]
 
     for word in banned_words:
         if word in name:
-            return False, f"Мем-слово: {word}"
+            return False, f"Подозрительное слово: {word}"
 
-    # 4️⃣ китайские символы
+    # 4️⃣ Китайские символы (оставим)
     if re.search(r'[\u4e00-\u9fff]', name):
         return False, "Китайские символы"
 
-    # 5️⃣ обязательная verified метка
+    # 5️⃣ verified больше НЕ обязателен
+    # просто пометка, не бан
+
     if not verified:
-        return False, "Не verified"
+        return True, "EARLY OK (unverified)"
 
     return True, "CLEAN OK"
