@@ -138,69 +138,71 @@ async def scan_once(app, settings, cmc, sheets):
 
     coins = cmc.fetch_recent_listings(limit=settings.limit)
 
-    for coin in coins:
-            try:
-                cid = int(coin.get("id") or 0)
-                if not cid:
-                    continue
-        
-                usd = (coin.get("quote") or {}).get("USD") or {}
-                vol = float(usd.get("volume_24h") or 0)
-                age = age_days(coin.get("date_added"))
-        
-                if age is None or age > settings.max_age_days or vol < settings.min_volume_usd:
-                    continue
-        
-                symbol = (coin.get("symbol") or "").strip()
-                name = (coin.get("name") or "").strip()
-
-                # ================= ULTRA =================
-        if cid not in seen and not ultra_seen(state, cid):
-
-            # CLEAN FILTER
-            allowed, reason = is_clean_token(coin, settings)
-
-            if not allowed:
-                continue  # пропускаем мусор
-
-            await safe_send(
-                app,
-                settings.chat_id,
-                f"🟢 <b>CLEAN LISTING</b>\n\n<b>{name}</b> ({symbol})",
-                parse_mode=ParseMode.HTML,
-            )
-
-            sheets.buffer_append({
-                "detected_at": now_iso_utc(),
-                "cmc_id": cid,
-                "symbol": symbol,
-                "status": "ULTRA",
-            })
-
-            mark_seen(state, cid)
-            mark_ultra_seen(state, cid)
-            save_state(state)
-
-        # ================= TRACK =================
-        already_tracked = cid in tracked
-        if not already_tracked:
-            t = detect_trading(symbol)
-            if not t["any"]:
+   for coin in coins:
+        try:
+            cid = int(coin.get("id") or 0)
+            if not cid:
                 continue
 
-            mark_tracked(state, cid)
-            save_state(state)
+            usd = (coin.get("quote") or {}).get("USD") or {}
+            vol = float(usd.get("volume_24h") or 0)
+            age = age_days(coin.get("date_added"))
 
-            sheets.buffer_append({
-                "detected_at": now_iso_utc(),
-                "cmc_id": cid,
-                "symbol": symbol,
-                "status": "TRACK",
-            })
-        else:
-            t = detect_trading(symbol)
+            if age is None or age > settings.max_age_days or vol < settings.min_volume_usd:
+                continue
 
-        # ================= GET 5m candles =================
+            symbol = (coin.get("symbol") or "").strip()
+            name = (coin.get("name") or "").strip()
+
+            # ================= ULTRA =================
+            if cid not in seen and not ultra_seen(state, cid):
+
+                # CLEAN FILTER
+                allowed, reason = is_clean_token(coin, settings)
+
+                if not allowed:
+                    continue
+
+                await safe_send(
+                    app,
+                    settings.chat_id,
+                    f"🟢 <b>CLEAN LISTING</b>\n\n<b>{name}</b> ({symbol})",
+                    parse_mode=ParseMode.HTML,
+                )
+
+                sheets.buffer_append({
+                    "detected_at": now_iso_utc(),
+                    "cmc_id": cid,
+                    "symbol": symbol,
+                    "status": "ULTRA",
+                })
+
+                mark_seen(state, cid)
+                mark_ultra_seen(state, cid)
+                save_state(state)
+
+            # ================= TRACK =================
+            already_tracked = cid in tracked
+
+            if not already_tracked:
+                t = detect_trading(symbol)
+
+                if not t["any"]:
+                    continue
+
+                mark_tracked(state, cid)
+                save_state(state)
+
+                sheets.buffer_append({
+                    "detected_at": now_iso_utc(),
+                    "cmc_id": cid,
+                    "symbol": symbol,
+                    "status": "TRACK",
+                })
+            else:
+                t = detect_trading(symbol)
+
+            # ================= GET 5m candles =================
         candles_5m = []
         if t["binance"]:
             candles_5m = get_binance_5m(symbol)
