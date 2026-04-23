@@ -159,6 +159,17 @@ async def scan_once(app, settings, cmc, sheets):
             
             symbol = (coin.get("symbol") or "").strip()
             name = (coin.get("name") or "").strip()
+            text_check = f"{symbol} {name}".lower()
+
+            bad_words = [
+                "usd", "usdt", "usdc", "eur", "eurc",
+                "rusd", "reur",
+                "wrapped", "bridged",
+                "stock", "shares", "ondo"
+            ]
+            
+            if any(word in text_check for word in bad_words):
+                continue
             
             if age is None or age > settings.max_age_days or vol < settings.min_volume_usd:
                 continue
