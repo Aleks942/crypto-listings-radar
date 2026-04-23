@@ -346,8 +346,15 @@ async def scan_once(app, settings, cmc, sheets):
             except Exception:
                 pass
 
+    await safe_send(
+        app,
+        settings.chat_id,
+        f"📊 SCAN REPORT\nCoins={len(coins)} | Passed={passed_count} | Tracked={tracked_count} | Signals={signal_count}"
+    )
+    
     sheets.flush()
     save_state(state)
+                
 
 
 # ================= MAIN =================
