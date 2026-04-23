@@ -202,7 +202,7 @@ async def scan_once(app, settings, cmc, sheets):
             else:
                 t = detect_trading(symbol)
 
-            # ================= GET 5m candles =================
+        # ================= GET 5m candles =================
         candles_5m = []
         if t["binance"]:
             candles_5m = get_binance_5m(symbol)
