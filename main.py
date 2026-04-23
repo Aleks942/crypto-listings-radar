@@ -375,16 +375,13 @@ async def scan_once(app, settings, cmc, sheets):
 # ================= MAIN =================
 async def main():
     settings = Settings.load()
-    print("SETTINGS:",
-          settings.max_age_days,
-          settings.min_volume_usd,
-          settings.limit,
-          flush=True)
 
-    await safe_send(
-        app,
-        settings.chat_id,
-        f"⚙️ SETTINGS\nAGE={settings.max_age_days}\nVOL={settings.min_volume_usd}\nLIMIT={settings.limit}"
+    print(
+        "SETTINGS:",
+        settings.max_age_days,
+        settings.min_volume_usd,
+        settings.limit,
+        flush=True
     )
 
     app = Application.builder().token(settings.bot_token).build()
@@ -402,6 +399,12 @@ async def main():
     await safe_send(
         app,
         settings.chat_id,
+        f"⚙️ SETTINGS\nAGE={settings.max_age_days}\nVOL={settings.min_volume_usd}\nLIMIT={settings.limit}"
+    )
+
+    await safe_send(
+        app,
+        settings.chat_id,
         "✅ Listings Radar ONLINE\n(бот запущен и работает)",
     )
 
@@ -409,7 +412,6 @@ async def main():
     if not startup_sent_recent(state, cooldown_sec=STARTUP_GUARD_SEC):
         mark_startup_sent(state)
         save_state(state)
-
     while True:
         try:
             await scan_once(app, settings, cmc, sheets)
