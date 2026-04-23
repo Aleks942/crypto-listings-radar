@@ -39,7 +39,7 @@ def is_unverified_token(token: Dict[str, Any]) -> Tuple[bool, str]:
     name = _s(token.get("name"))
     slug = _s(token.get("slug")).lower()
 
-    mcap = float(token.get("market_cap") or 0)
+    mcap = float(usd.get("market_cap") or 0)
     usd = (token.get("quote") or {}).get("USD") or {}
     vol = float(usd.get("volume_24h") or 0)
 
