@@ -202,7 +202,7 @@ async def scan_once(app, settings, cmc, sheets):
             
             
             
-             if not t["any"]:
+            if not t["any"]:
                     continue
 
                 mark_tracked(state, cid)
