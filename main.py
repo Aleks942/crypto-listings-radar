@@ -138,7 +138,7 @@ async def scan_once(app, settings, cmc, sheets):
 
     coins = cmc.fetch_recent_listings(limit=settings.limit)
 
-   for coin in coins:
+    for coin in coins:
         try:
             cid = int(coin.get("id") or 0)
             if not cid:
