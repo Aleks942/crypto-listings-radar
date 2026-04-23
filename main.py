@@ -189,20 +189,13 @@ async def scan_once(app, settings, cmc, sheets):
 
                
     
-            # ================= TRACK =================
+           # ================= TRACK =================
             already_tracked = cid in tracked
 
-            
-
             if not already_tracked:
-
-               
-            
                 t = detect_trading(symbol)
-            
-            
-            
-            if not t["any"]:
+
+                if not t["any"]:
                     continue
 
                 mark_tracked(state, cid)
@@ -214,6 +207,7 @@ async def scan_once(app, settings, cmc, sheets):
                     "symbol": symbol,
                     "status": "TRACK",
                 })
+
             else:
                 t = detect_trading(symbol)
 
