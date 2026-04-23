@@ -98,12 +98,28 @@ def detect_trading(symbol):
     binance_ok = check_binance(symbol)
     bybit_spot_ok = check_bybit(symbol)
     bybit_linear_ok = check_bybit_linear(symbol)
+    mexc_ok = check_mexc(symbol)
+    gate_ok = check_gate(symbol)
+    bitget_ok = check_bitget(symbol)
+    kucoin_ok = check_kucoin(symbol)
 
     return {
         "binance": binance_ok,
         "bybit_spot": bybit_spot_ok,
         "bybit_linear": bybit_linear_ok,
-        "any": binance_ok or bybit_spot_ok or bybit_linear_ok,
+        "mexc": mexc_ok,
+        "gate": gate_ok,
+        "bitget": bitget_ok,
+        "kucoin": kucoin_ok,
+        "any": (
+            binance_ok
+            or bybit_spot_ok
+            or bybit_linear_ok
+            or mexc_ok
+            or gate_ok
+            or bitget_ok
+            or kucoin_ok
+        ),
     }
 
 
