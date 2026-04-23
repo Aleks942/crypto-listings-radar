@@ -202,15 +202,17 @@ async def scan_once(app, settings, cmc, sheets):
             else:
                 t = detect_trading(symbol)
 
-        # ================= GET 5m candles =================
-        candles_5m = []
-        if t["binance"]:
-            candles_5m = get_binance_5m(symbol)
-        elif t["bybit_spot"] or t["bybit_linear"]:
-            candles_5m = get_bybit_5m(symbol)
+            # ================= GET 5m candles =================
+            candles_5m = []
 
-        # ================= CROWD FLOW =================
-        try:
+            if t["binance"]:
+                candles_5m = get_binance_5m(symbol)
+            elif t["bybit_spot"] or t["bybit_linear"]:
+                candles_5m = get_bybit_5m(symbol)
+
+            # ================= CROWD FLOW =================
+            try:
+        
             if funding_crowd_ok(symbol):
                 await safe_send(
                     app,
