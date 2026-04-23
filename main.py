@@ -13,6 +13,8 @@ from noise_filter import is_clean_token
 from confirm_entry_client import send_to_confirm_entry
 
 from state import (
+    early_sent,
+    mark_early_sent,
     load_state,
     save_state,
     seen_ids,
