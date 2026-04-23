@@ -171,6 +171,14 @@ async def scan_once(app, settings, cmc, sheets):
             if any(word in text_check for word in bad_words):
                 continue
             
+            await safe_send(
+                app,
+                settings.chat_id,
+                f"🔍 DEBUG {symbol}\nage={age}\nvol={vol}\nlimit_age={settings.max_age_days}\nmin_vol={settings.min_volume_usd}"
+            )
+            
+            break
+            
             if age is not None and age > settings.max_age_days:
                 continue
             
