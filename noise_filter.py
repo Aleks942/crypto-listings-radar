@@ -79,7 +79,7 @@ def is_clean_token(token: Dict[str, Any], settings: Settings) -> Tuple[bool, str
     verified = bool(token.get("is_verified"))
 
     # 1️⃣ минимальный market cap
-    if mcap < 10_000_000:
+    if mcap < 1000000:
         return False, "Market Cap ниже 10M"
 
     # 2️⃣ минимальный объём
