@@ -171,7 +171,10 @@ async def scan_once(app, settings, cmc, sheets):
             if any(word in text_check for word in bad_words):
                 continue
             
-            if age is None or age > settings.max_age_days or vol < settings.min_volume_usd:
+            if age is not None and age > settings.max_age_days:
+                continue
+            
+            if vol < settings.min_volume_usd:
                 continue
             
             
