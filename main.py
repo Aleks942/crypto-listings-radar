@@ -1,6 +1,7 @@
 import asyncio
 import os
 import time
+import traceback
 from telegram.constants import ParseMode
 from telegram.ext import Application
 
@@ -348,16 +349,24 @@ async def main():
         mark_startup_sent(state)
         save_state(state)
 
-    while True:
-        try:
-            await scan_once(app, settings, cmc, sheets)
-        except Exception as e:
-            try:
-                await safe_send(app, settings.chat_id, f"❌ Ошибка: {e}", parse_mode=None)
-            except Exception:
-                pass
+   while True:
+    try:
+        await scan_once(app, settings, cmc, sheets)
 
-        await asyncio.sleep(settings.check_interval_min * 60)
+    except Exception as e:
+        err = traceback.format_exc()[:3500]
+
+        try:
+            await safe_send(
+                app,
+                settings.chat_id,
+                f"❌ <b>MAIN LOOP ERROR</b>\n\n<pre>{err}</pre>",
+                parse_mode=ParseMode.HTML
+            )
+        except Exception:
+            pass
+
+    await asyncio.sleep(settings.check_interval_min * 60)
 
 
 if __name__ == "__main__":
