@@ -139,21 +139,22 @@ async def scan_once(app, settings, cmc, sheets):
     coins = cmc.fetch_recent_listings(limit=settings.limit)
 
     for coin in coins:
-        cid = int(coin.get("id") or 0)
-        if not cid:
-            continue
+            try:
+                cid = int(coin.get("id") or 0)
+                if not cid:
+                    continue
+        
+                usd = (coin.get("quote") or {}).get("USD") or {}
+                vol = float(usd.get("volume_24h") or 0)
+                age = age_days(coin.get("date_added"))
+        
+                if age is None or age > settings.max_age_days or vol < settings.min_volume_usd:
+                    continue
+        
+                symbol = (coin.get("symbol") or "").strip()
+                name = (coin.get("name") or "").strip()
 
-        usd = (coin.get("quote") or {}).get("USD") or {}
-        vol = float(usd.get("volume_24h") or 0)
-        age = age_days(coin.get("date_added"))
-
-        if age is None or age > settings.max_age_days or vol < settings.min_volume_usd:
-            continue
-
-        symbol = (coin.get("symbol") or "").strip()
-        name = (coin.get("name") or "").strip()
-
-        # ================= ULTRA =================
+                # ================= ULTRA =================
         if cid not in seen and not ultra_seen(state, cid):
 
             # CLEAN FILTER
