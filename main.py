@@ -240,18 +240,20 @@ async def scan_once(app, settings, cmc, sheets):
 
             if not already_tracked:
                 t = detect_trading(symbol)
+
                 await safe_send(
                     app,
                     settings.chat_id,
-                    f"📈 {symbol}\nBINANCE={t['binance']} BYBIT={t['bybit_spot']} FUT={t['bybit_linear']}"
+                    f"🔎 {symbol}\nBIN={t['binance']} | BYB={t['bybit_spot']} | FUT={t['bybit_linear']} | MEXC={t['mexc']} | GATE={t['gate']} | BITGET={t['bitget']} | KUCOIN={t['kucoin']}"
                 )
+
                 break
 
                 if not t["any"]:
                     await safe_send(
                         app,
                         settings.chat_id,
-                        f"🟡 EARLY LISTING\n{symbol}\nНет Binance / Bybit\nВозможен DEX launch"
+                        f"🟡 EARLY LISTING\n{symbol}\nНет биржи из списка"
                     )
                     continue
 
@@ -266,6 +268,7 @@ async def scan_once(app, settings, cmc, sheets):
                     "symbol": symbol,
                     "status": "TRACK",
                 })
+
             else:
                 t = detect_trading(symbol)
                 if t["any"]:
