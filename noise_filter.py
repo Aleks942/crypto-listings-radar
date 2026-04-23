@@ -39,25 +39,26 @@ def is_unverified_token(token: Dict[str, Any]) -> Tuple[bool, str]:
     name = _s(token.get("name"))
     slug = _s(token.get("slug")).lower()
 
-    mcap = float(usd.get("market_cap") or 0)
     usd = (token.get("quote") or {}).get("USD") or {}
+    mcap = float(usd.get("market_cap") or 0)
     vol = float(usd.get("volume_24h") or 0)
 
-    # 1) Реальные признаки домена/URL в name/slug (не просто точка)
+    # 1) Реальные признаки домена/URL
     if _looks_like_domain(name):
         return True, "В названии признаки URL/домена"
+
     if _looks_like_domain(slug):
         return True, "В slug признаки URL/домена"
 
-    # 2) symbol с подчёркиванием — часто мусор/обёртка
+    # 2) symbol с подчёркиванием
     if "_" in symbol:
         return True, "Подозрительный symbol (есть _)"
 
-    # 3) market cap = 0 при объёме — часто фейк/кривые метрики
+    # 3) market cap = 0 при высоком объёме
     if mcap == 0 and vol >= 500_000:
         return True, "Market Cap = 0 при высоком объёме"
 
-    # 4) очень длинный тикер — чаще мусор
+    # 4) очень длинный тикер
     if len(symbol) >= 12:
         return True, "Слишком длинный symbol"
 
