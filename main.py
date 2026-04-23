@@ -216,6 +216,12 @@ async def scan_once(app, settings, cmc, sheets):
 
             if not already_tracked:
                 t = detect_trading(symbol)
+                await safe_send(
+                    app,
+                    settings.chat_id,
+                    f"📈 {symbol}\nBINANCE={t['binance']} BYBIT={t['bybit_spot']} FUT={t['bybit_linear']}"
+                )
+                break
 
                 if not t["any"]:
                     continue
