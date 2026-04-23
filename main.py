@@ -138,6 +138,12 @@ async def scan_once(app, settings, cmc, sheets):
 
     coins = cmc.fetch_recent_listings(limit=settings.limit)
 
+    await safe_send(
+        app,
+        settings.chat_id,
+        f"📡 SCAN START\nМонет получено: {len(coins)}"
+    )
+
     for coin in coins:
         try:
             cid = int(coin.get("id") or 0)
