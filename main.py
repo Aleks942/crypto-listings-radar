@@ -156,8 +156,6 @@ async def scan_once(app, settings, cmc, sheets):
 
             # ================= ULTRA =================
             if cid not in seen and not ultra_seen(state, cid):
-
-                # CLEAN FILTER
                 allowed, reason = is_clean_token(coin, settings)
 
                 if not allowed:
@@ -212,116 +210,127 @@ async def scan_once(app, settings, cmc, sheets):
 
             # ================= CROWD FLOW =================
             try:
-        
-            if funding_crowd_ok(symbol):
-                await safe_send(
-                    app,
-                    settings.chat_id,
-                    f"🟢 <b>CROWD FLOW</b>\n(Толпа вошла — рынок заряжается)\n\n<b>{symbol}</b>",
-                )
-
-                sheets.buffer_append({
-                    "detected_at": now_iso_utc(),
-                    "cmc_id": cid,
-                    "symbol": symbol,
-                    "status": "CROWD_FLOW",
-                })
-        except Exception:
-            pass
-
-        # ================= CROWD ENGINE + EXPLAIN =================
-        crowd_recent = False
-
-        try:
-            if candles_5m and crowd_engine_signal(candles_5m):
-                crowd_recent = True
-                state.setdefault("crowd_memory", {})[str(cid)] = _now()
-
-                explain = crowd_engine_explain(candles_5m)
-
-                await safe_send(
-                    app,
-                    settings.chat_id,
-                    f"🟢 <b>CROWD ENGINE</b>\n\n{explain}\n\n<b>{symbol}</b>",
-                )
-
-                sheets.buffer_append({
-                    "detected_at": now_iso_utc(),
-                    "cmc_id": cid,
-                    "symbol": symbol,
-                    "status": "CROWD_ENGINE",
-                })
-        except Exception:
-            pass
-
-        try:
-            crowd_ts = state.get("crowd_memory", {}).get(str(cid))
-            if crowd_ts and _now() - crowd_ts < CROWD_MEMORY_SEC:
-                crowd_recent = True
-        except Exception:
-            pass
-
-        # ================= FIRST MOVE =================
-        if not confirm_light_sent(state, cid):
-            if (
-                candles_5m
-                and anti_scam_filter(candles_5m)
-                and liquidity_growth_ok(candles_5m)
-                and liquidity_memory_ok(symbol, candles_5m)
-            ):
-                fm = first_move_eval(symbol, candles_5m)
-
-                if fm.get("ok") and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN):
-
-                    if crowd_recent:
-                        fm["text"] = "🔥 CROWD BOOSTED\n" + fm["text"]
-
+                if funding_crowd_ok(symbol):
                     await safe_send(
                         app,
                         settings.chat_id,
-                        fm["text"] + "\n\n<b>Действие:</b> импульс начался → следи за входом по плану (Entry/Stop).",
+                        f"🟢 <b>CROWD FLOW</b>\n(Толпа вошла — рынок заряжается)\n\n<b>{symbol}</b>",
                     )
 
                     sheets.buffer_append({
                         "detected_at": now_iso_utc(),
                         "cmc_id": cid,
                         "symbol": symbol,
-                        "status": "FIRST_MOVE",
+                        "status": "CROWD_FLOW",
                     })
+            except Exception:
+                pass
 
-                    mark_first_move_sent(state, cid, _now())
+            # ================= CROWD ENGINE + EXPLAIN =================
+            crowd_recent = False
+
+            try:
+                if candles_5m and crowd_engine_signal(candles_5m):
+                    crowd_recent = True
+                    state.setdefault("crowd_memory", {})[str(cid)] = _now()
+
+                    explain = crowd_engine_explain(candles_5m)
+
+                    await safe_send(
+                        app,
+                        settings.chat_id,
+                        f"🟢 <b>CROWD ENGINE</b>\n\n{explain}\n\n<b>{symbol}</b>",
+                    )
+
+                    sheets.buffer_append({
+                        "detected_at": now_iso_utc(),
+                        "cmc_id": cid,
+                        "symbol": symbol,
+                        "status": "CROWD_ENGINE",
+                    })
+            except Exception:
+                pass
+
+            try:
+                crowd_ts = state.get("crowd_memory", {}).get(str(cid))
+                if crowd_ts and _now() - crowd_ts < CROWD_MEMORY_SEC:
+                    crowd_recent = True
+            except Exception:
+                pass
+
+            # ================= FIRST MOVE =================
+            if not confirm_light_sent(state, cid):
+                if (
+                    candles_5m
+                    and anti_scam_filter(candles_5m)
+                    and liquidity_growth_ok(candles_5m)
+                    and liquidity_memory_ok(symbol, candles_5m)
+                ):
+                    fm = first_move_eval(symbol, candles_5m)
+
+                    if fm.get("ok") and first_move_cooldown_ok(state, cid, FIRST_COOLDOWN):
+
+                        if crowd_recent:
+                            fm["text"] = "🔥 CROWD BOOSTED\n" + fm["text"]
+
+                        await safe_send(
+                            app,
+                            settings.chat_id,
+                            fm["text"] + "\n\n<b>Действие:</b> импульс начался → следи за входом по плану (Entry/Stop).",
+                        )
+
+                        sheets.buffer_append({
+                            "detected_at": now_iso_utc(),
+                            "cmc_id": cid,
+                            "symbol": symbol,
+                            "status": "FIRST_MOVE",
+                        })
+
+                        mark_first_move_sent(state, cid, _now())
+                        save_state(state)
+
+            # ================= CONFIRM LIGHT =================
+            candles_15m = []
+
+            if t["binance"] and get_binance_15m:
+                candles_15m = get_binance_15m(symbol)
+            elif (t["bybit_spot"] or t["bybit_linear"]) and get_bybit_15m:
+                candles_15m = get_bybit_15m(symbol)
+
+            if candles_15m:
+                cl = confirm_light_eval(symbol, candles_15m)
+
+                if cl.get("ok") and confirm_light_cooldown_ok(state, cid, CONFIRM_COOLDOWN):
+                    exchange = "BINANCE" if t["binance"] else "BYBIT"
+
+                    mark_confirm_light_sent(state, cid, _now())
                     save_state(state)
 
-        # ================= CONFIRM LIGHT =================
-        candles_15m = []
-        if t["binance"] and get_binance_15m:
-            candles_15m = get_binance_15m(symbol)
-        elif (t["bybit_spot"] or t["bybit_linear"]) and get_bybit_15m:
-            candles_15m = get_bybit_15m(symbol)
+                    sheets.buffer_append({
+                        "detected_at": now_iso_utc(),
+                        "cmc_id": cid,
+                        "symbol": symbol,
+                        "status": "CONFIRM_LIGHT",
+                    })
 
-        if candles_15m:
-            cl = confirm_light_eval(symbol, candles_15m)
+                    send_to_confirm_entry(
+                        symbol=symbol,
+                        exchange=exchange,
+                        tf="15m",
+                        candles=candles_15m,
+                        mode_hint="CONFIRM_LIGHT",
+                    )
 
-            if cl.get("ok") and confirm_light_cooldown_ok(state, cid, CONFIRM_COOLDOWN):
-                exchange = "BINANCE" if t["binance"] else "BYBIT"
-
-                mark_confirm_light_sent(state, cid, _now())
-                save_state(state)
-
-                sheets.buffer_append({
-                    "detected_at": now_iso_utc(),
-                    "cmc_id": cid,
-                    "symbol": symbol,
-                    "status": "CONFIRM_LIGHT",
-                })
-
-                send_to_confirm_entry(
-                    symbol=symbol,
-                    exchange=exchange,
-                    tf="15m",
-                    candles=candles_15m,
-                    mode_hint="CONFIRM_LIGHT",
+        except Exception as e:
+            try:
+                await safe_send(
+                    app,
+                    settings.chat_id,
+                    f"⚠️ COIN ERROR: {coin.get('symbol', 'UNKNOWN')}\n<pre>{str(e)[:1000]}</pre>",
+                    parse_mode=ParseMode.HTML
                 )
+            except Exception:
+                pass
 
     sheets.flush()
     save_state(state)
