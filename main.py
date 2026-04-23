@@ -243,7 +243,7 @@ async def scan_once(app, settings, cmc, sheets):
                 t = detect_trading(symbol)
 
              
-                break
+               
 
                 if not t["any"]:
                     await safe_send(
