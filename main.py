@@ -375,7 +375,7 @@ async def scan_once(app, settings, cmc, sheets):
 # ================= MAIN =================
 async def main():
     settings = Settings.load()
-        print("SETTINGS:",
+    print("SETTINGS:",
           settings.max_age_days,
           settings.min_volume_usd,
           settings.limit,
