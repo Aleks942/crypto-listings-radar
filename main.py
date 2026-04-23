@@ -137,6 +137,9 @@ async def scan_once(app, settings, cmc, sheets):
     tracked = tracked_ids(state)
 
     coins = cmc.fetch_recent_listings(limit=settings.limit)
+    passed_count = 0
+    tracked_count = 0
+    signal_count = 0
 
     await safe_send(
         app,
