@@ -224,6 +224,11 @@ async def scan_once(app, settings, cmc, sheets):
                 break
 
                 if not t["any"]:
+                    await safe_send(
+                        app,
+                        settings.chat_id,
+                        f"🟡 EARLY LISTING\n{symbol}\nНет Binance / Bybit\nВозможен DEX launch"
+                    )
                     continue
 
                 tracked_count += 1
