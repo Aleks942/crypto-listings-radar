@@ -187,13 +187,8 @@ async def scan_once(app, settings, cmc, sheets):
                 mark_ultra_seen(state, cid)
                 save_state(state)
 
-                await safe_send(
-                    app,
-                    settings.chat_id,
-                    f"➡️ AFTER ULTRA: {symbol}"
-                )
+               
     
-
             # ================= TRACK =================
             already_tracked = cid in tracked
 
