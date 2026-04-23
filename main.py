@@ -153,7 +153,10 @@ async def scan_once(app, settings, cmc, sheets):
             usd = (coin.get("quote") or {}).get("USD") or {}
             vol = float(usd.get("volume_24h") or 0)
             age = age_days(coin.get("date_added"))
-
+            
+            symbol = (coin.get("symbol") or "").strip()
+            name = (coin.get("name") or "").strip()
+            
             if age is None or age > settings.max_age_days or vol < settings.min_volume_usd:
                 continue
             
