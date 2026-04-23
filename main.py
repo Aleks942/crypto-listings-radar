@@ -243,11 +243,14 @@ async def scan_once(app, settings, cmc, sheets):
                 t = detect_trading(symbol)
 
                 if not t["any"]:
-                    await safe_send(
-                        app,
-                        settings.chat_id,
-                        f"🟡 EARLY LISTING\n{symbol}\nПока нет CEX-торговли\nВозможен DEX / pre-market stage"
-                    )
+                    if not early_sent(state, cid):
+                        await safe_send(
+                            app,
+                            settings.chat_id,
+                            f"🟡 EARLY LISTING\n{symbol}\nПока нет CEX-торговли\nВозможен DEX / pre-market stage"
+                        )
+                        mark_early_sent(state, cid, _now())
+                        save_state(state)
                     continue
 
                 tracked_count += 1
