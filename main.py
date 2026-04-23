@@ -30,7 +30,15 @@ from state import (
     mark_ultra_seen,
 )
 
-from detect_trading import check_binance, check_bybit, check_bybit_linear
+from detect_trading import (
+    check_binance,
+    check_bybit,
+    check_bybit_linear,
+    check_mexc,
+    check_gate,
+    check_bitget,
+    check_kucoin,
+)
 from first_move import first_move_eval
 from confirm_light import confirm_light_eval
 
