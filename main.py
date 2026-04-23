@@ -192,29 +192,17 @@ async def scan_once(app, settings, cmc, sheets):
             # ================= TRACK =================
             already_tracked = cid in tracked
 
-            await safe_send(
-                app,
-                settings.chat_id,
-                f"🧠 STATE: {symbol}\nseen={cid in seen} | tracked={already_tracked} | ultra={ultra_seen(state, cid)}"
-            )
+            
 
             if not already_tracked:
 
-                await safe_send(
-                    app,
-                    settings.chat_id,
-                    f"⏳ CHECKING EXCHANGE: {symbol}"
-                )
+               
             
                 t = detect_trading(symbol)
             
-                await safe_send(
-                    app,
-                    settings.chat_id,
-                    f"📈 TRADING CHECK: {symbol}\nBINANCE={t['binance']} | BYBIT={t['bybit_spot']} | FUTURES={t['bybit_linear']}"
-                )
             
-                if not t["any"]:
+            
+             if not t["any"]:
                     continue
 
                 mark_tracked(state, cid)
