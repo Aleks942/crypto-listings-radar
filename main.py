@@ -208,10 +208,7 @@ async def scan_once(app, settings, cmc, sheets):
             if cid not in seen and not ultra_seen(state, cid):
                 allowed, reason = is_clean_token(coin, settings)
             
-               
             
-                if not allowed:
-                    continue
 
                 if not allowed:
                     continue
@@ -234,7 +231,7 @@ async def scan_once(app, settings, cmc, sheets):
                 mark_ultra_seen(state, cid)
                 save_state(state)
 
-                       # ================= TRACK =================
+            # ================= TRACK =================
             already_tracked = cid in tracked
 
             if not already_tracked:
