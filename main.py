@@ -169,11 +169,7 @@ async def scan_once(app, settings, cmc, sheets):
     tracked_count = 0
     signal_count = 0
 
-    await safe_send(
-        app,
-        settings.chat_id,
-        f"📡 SCAN START\nМонет получено: {len(coins)}"
-    )
+    # SCAN START muted
 
     for coin in coins:
         try:
