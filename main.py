@@ -206,6 +206,7 @@ def anti_scam_filter(candles):
 
 # ================= SCAN LOOP =================
 async def scan_once(app, settings, cmc, sheets):
+    print(">>> SCAN_ONCE START", flush=True)
     state = load_state()
     seen = seen_ids(state)
     tracked = tracked_ids(state)
