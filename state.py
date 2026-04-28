@@ -151,14 +151,15 @@ def load_state() -> Dict[str, Any]:
     return _file_load_state()
 
 
-def save_state(state: Dict[str, Any]) -> None:
-    """
-    Единственная точка входа: main.py делает from state import save_state
-    """
-    state["__ts"] = float(time.time())
+def save_state(data: Dict[str, Any]) -> None:
     if _sheets_enabled():
-        return _sheets_save_state(state)
-    return _file_save_state(state)
+        try:
+            _sheets_save_state(data)
+            return
+        except Exception as e:
+            print("⚠️ SHEETS SAVE ERROR:", e, flush=True)
+
+    _file_save_state(data)
 
 
 # -------------------------
