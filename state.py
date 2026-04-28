@@ -142,7 +142,12 @@ def load_state() -> Dict[str, Any]:
     Единственная точка входа: main.py делает from state import load_state
     """
     if _sheets_enabled():
-        return _sheets_load_state()
+        try:
+            return _sheets_load_state()
+        except Exception as e:
+            print("⚠️ SHEETS LOAD ERROR:", e, flush=True)
+            return _file_load_state()
+
     return _file_load_state()
 
 
