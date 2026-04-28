@@ -248,7 +248,7 @@ async def scan_once(app, settings, cmc, sheets):
                 continue
             
             if age is not None and age > settings.max_age_days:
-                print(f"SKIP AGE {symbol} age={age}", flush=True)
+                
                 continue
             
             if vol < settings.min_volume_usd:
