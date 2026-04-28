@@ -252,10 +252,10 @@ async def scan_once(app, settings, cmc, sheets):
                 continue
             
             if vol < settings.min_volume_usd:
-                print(f"SKIP VOL {symbol} vol={vol}", flush=True)
+                
                 continue
             
-            print(f"PASS FILTER {symbol}", flush=True)
+            
             
             passed_count += 1
         
