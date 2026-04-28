@@ -9,7 +9,10 @@ from config import Settings
 from cmc import CMCClient, age_days
 from sheets import SheetsClient, now_iso_utc
 from noise_filter import is_clean_token
-
+import asyncio
+import threading
+from fastapi import FastAPI, Request
+from contextlib import asynccontextmanager
 from confirm_entry_client import send_to_confirm_entry
 
 from state import (
@@ -61,6 +64,50 @@ try:
     from candles_bybit import get_candles_15m as get_bybit_15m
 except Exception:
     get_bybit_15m = None
+
+# ================= FASTAPI + BACKGROUND LOOP ===============
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print(">>> LIFESPAN STARTED", flush=True)
+
+    def start_background_loop():
+        asyncio.run(main())
+
+    thread = threading.Thread(target=start_background_loop)
+    thread.daemon = True
+    thread.start()
+
+    yield
+
+app = FastAPI(lifespan=lifespan)
+
+
+@app.post("/webhook")
+async def tradingview_webhook(request: Request):
+    data = await request.json()
+
+    symbol = data.get("symbol", "UNKNOWN")
+    action = data.get("action", "signal")
+
+    print(f"WEBHOOK RECEIVED: {data}", flush=True)
+
+    try:
+        settings = Settings()
+        application = Application.builder().token(settings.bot_token).build()
+        await application.bot.send_message(
+            chat_id=settings.chat_id,
+            text=(
+                f"📩 <b>TRADINGVIEW SIGNAL</b>\n\n"
+                f"Монета: <b>{symbol}</b>\n"
+                f"Действие: {action}"
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception as e:
+        print("Webhook send error:", e, flush=True)
+
+    return {"status": "ok"}
 
 
 # ================= ENV =================
@@ -467,5 +514,4 @@ async def main():
         await asyncio.sleep(settings.check_interval_min * 60)
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+
