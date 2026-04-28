@@ -233,26 +233,33 @@ async def scan_once(app, settings, cmc, sheets):
             symbol = (coin.get("symbol") or "").strip()
             name = (coin.get("name") or "").strip()
             text_check = f"{symbol} {name}".lower()
-
+            
+            # 🔍 Диагностика
+            print(f"CHECK {symbol} age={age} vol={vol}", flush=True)
+            
             bad_words = [
                 "usd", "usdt", "usdc", "eur", "eurc",
                 "rusd", "reur",
                 "wrapped", "bridged",
                 "stock", "shares", "ondo"
             ]
-
-            if any(word in text_check for word in bad_words):
-                continue
-
-            if age is not None and age > settings.max_age_days:
-                continue
-
-            if vol < settings.min_volume_usd:
-                continue
-
-            passed_count += 1
             
-
+            if any(word in text_check for word in bad_words):
+                print(f"SKIP BAD WORD {symbol}", flush=True)
+                continue
+            
+            if age is not None and age > settings.max_age_days:
+                print(f"SKIP AGE {symbol} age={age}", flush=True)
+                continue
+            
+            if vol < settings.min_volume_usd:
+                print(f"SKIP VOL {symbol} vol={vol}", flush=True)
+                continue
+            
+            print(f"PASS FILTER {symbol}", flush=True)
+            
+            passed_count += 1
+        
             # ================= ULTRA =================
             if cid not in seen and not ultra_seen(state, cid):
                 allowed, reason = is_clean_token(coin, settings)
