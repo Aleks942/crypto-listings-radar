@@ -501,6 +501,7 @@ async def main():
 
         except Exception:
             err = traceback.format_exc()[:3500]
+            print("MAIN LOOP ERROR:", err, flush=True)
 
             try:
                 await safe_send(
