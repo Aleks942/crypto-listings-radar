@@ -212,6 +212,7 @@ async def scan_once(app, settings, cmc, sheets):
     tracked = tracked_ids(state)
 
     coins = cmc.fetch_recent_listings(limit=settings.limit)
+    print(f">>> COINS RECEIVED: {len(coins)}", flush=True)
 
     passed_count = 0
     tracked_count = 0
