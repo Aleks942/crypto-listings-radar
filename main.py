@@ -495,6 +495,7 @@ async def main():
         save_state(state)
 
     while True:
+        print(">>> SCAN LOOP TICK", flush=True)
         try:
             await scan_once(app, settings, cmc, sheets)
 
