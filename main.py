@@ -206,13 +206,13 @@ def anti_scam_filter(candles):
 
 # ================= SCAN LOOP =================
 async def scan_once(app, settings, cmc, sheets):
-    print(">>> SCAN_ONCE START", flush=True)
+    
     state = load_state()
     seen = seen_ids(state)
     tracked = tracked_ids(state)
 
     coins = cmc.fetch_recent_listings(limit=settings.limit)
-    print(f">>> COINS RECEIVED: {len(coins)}", flush=True)
+    
 
     passed_count = 0
     tracked_count = 0
@@ -234,8 +234,7 @@ async def scan_once(app, settings, cmc, sheets):
             name = (coin.get("name") or "").strip()
             text_check = f"{symbol} {name}".lower()
             
-            # 🔍 Диагностика
-            print(f"CHECK {symbol} age={age} vol={vol}", flush=True)
+            
             
             bad_words = [
                 "usd", "usdt", "usdc", "eur", "eurc",
